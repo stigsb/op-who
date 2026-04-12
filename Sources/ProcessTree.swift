@@ -246,6 +246,31 @@ enum ProcessTree {
         return String(decoding: buffer.prefix(min(size, 4096)), as: UTF8.self)
     }
 
+    /// Check if a running process (by PID) is signed by 1Password's Team ID.
+    static func isRunningProcessSignedByOnePassword(pid: pid_t) -> Bool {
+        let attributes = [kSecGuestAttributePid: pid] as CFDictionary
+        var code: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code) == errSecSuccess,
+              let code = code else {
+            return false
+        }
+
+        let requirementText = """
+            anchor apple generic and certificate leaf[subject.OU] = "\(onePasswordTeamID)"
+            """ as CFString
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            requirementText,
+            SecCSFlags(),
+            &requirement
+        ) == errSecSuccess,
+              let requirement = requirement else {
+            return false
+        }
+
+        return SecCodeCheckValidity(code, SecCSFlags(), requirement) == errSecSuccess
+    }
+
     private static func isSignedByOnePassword(path: String) -> Bool {
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath() as CFURL
         var staticCode: SecStaticCode?
