@@ -7,6 +7,10 @@ enum TerminalHelper {
 
     /// Get the tab/session title for a TTY in a specific terminal app.
     static func tabTitle(forTTY tty: String, terminalBundleID: String?, terminalPID: pid_t?) -> String? {
+        guard isValidTTYPath(tty) else {
+            NSLog("[op-who] Invalid TTY path: \(tty)")
+            return nil
+        }
         guard let bid = terminalBundleID else {
             // No known terminal — try AX fallback on the frontmost terminal-like app
             return nil
@@ -55,6 +59,10 @@ enum TerminalHelper {
 
     /// Try to activate the terminal tab that owns a given TTY.
     static func activateTab(forTTY tty: String, terminalBundleID: String? = nil) {
+        guard isValidTTYPath(tty) else {
+            NSLog("[op-who] Invalid TTY path: \(tty)")
+            return
+        }
         let bid = terminalBundleID ?? detectTerminalBundleID()
         guard let bid = bid else {
             NSLog("[op-who] No supported terminal found for TTY \(tty)")
@@ -105,6 +113,10 @@ enum TerminalHelper {
 
     /// Write a message to a TTY device.
     static func writeMessage(to tty: String, message: String) {
+        guard isValidTTYPath(tty) else {
+            NSLog("[op-who] Invalid TTY path: \(tty)")
+            return
+        }
         guard let fh = FileHandle(forWritingAtPath: tty) else {
             NSLog("[op-who] Cannot open \(tty) for writing")
             return
@@ -117,6 +129,12 @@ enum TerminalHelper {
     }
 
     // MARK: - Private
+
+    /// Validate that a TTY path matches the expected macOS format `/dev/ttys[0-9]+`.
+    private static func isValidTTYPath(_ tty: String) -> Bool {
+        let pattern = #"^/dev/ttys\d+$"#
+        return tty.range(of: pattern, options: .regularExpression) != nil
+    }
 
     private static func detectTerminalBundleID() -> String? {
         let knownTerminals = [
