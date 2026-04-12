@@ -108,7 +108,76 @@ class OnePasswordWatcher {
         NSLog("[op-who] Detached from 1Password")
     }
 
+    /// Check whether the AX element looks like a 1Password CLI approval dialog
+    /// by inspecting role, subrole, and child static text content.
+    private func isApprovalDialog(_ element: AXUIElement) -> Bool {
+        // Must be a window
+        guard axStringAttribute(element, kAXRoleAttribute) == "AXWindow" else {
+            return false
+        }
+
+        // Approval dialogs use the AXDialog subrole; other windows (e.g. the
+        // vault browser) use AXStandardWindow.
+        let subrole = axStringAttribute(element, kAXSubroleAttribute)
+        if subrole == "AXDialog" {
+            return true
+        }
+
+        // Some 1Password versions may present the approval UI as a standard
+        // window. Fall back to scanning visible static text for CLI-related
+        // keywords that appear in the approval prompt.
+        let keywords = [
+            "command-line", "command line", "CLI",
+            "wants to access", "is trying to",
+            "Authorize", "Deny",
+        ]
+        let texts = collectStaticTexts(element)
+        let matched = texts.contains { text in
+            keywords.contains { text.localizedCaseInsensitiveContains($0) }
+        }
+        if matched {
+            return true
+        }
+
+        NSLog("[op-who] Ignoring non-approval window (subrole: \(subrole ?? "nil"), texts: \(texts.prefix(5)))")
+        return false
+    }
+
+    /// Return the string value of an AX attribute, or nil.
+    private func axStringAttribute(_ element: AXUIElement, _ attr: String) -> String? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    /// Recursively collect AXStaticText values from a UI element tree (capped depth).
+    private func collectStaticTexts(_ element: AXUIElement, depth: Int = 0) -> [String] {
+        guard depth < 8 else { return [] }
+
+        var results: [String] = []
+
+        if axStringAttribute(element, kAXRoleAttribute) == "AXStaticText",
+           let value = axStringAttribute(element, kAXValueAttribute) {
+            results.append(value)
+        }
+
+        var childrenRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else {
+            return results
+        }
+
+        for child in children {
+            results.append(contentsOf: collectStaticTexts(child, depth: depth + 1))
+        }
+        return results
+    }
+
     fileprivate func handleWindowEvent(element: AXUIElement) {
+        guard isApprovalDialog(element) else { return }
+
         let opProcs = ProcessTree.findOpProcesses()
         guard !opProcs.isEmpty else { return }
 
