@@ -68,6 +68,12 @@ class OnePasswordWatcher {
 
     private func attach(to app: NSRunningApplication) {
         let pid = app.processIdentifier
+
+        guard ProcessTree.isRunningProcessSignedByOnePassword(pid: pid) else {
+            NSLog("[op-who] Refusing to attach: 1Password app (pid \(pid)) failed code signature verification")
+            return
+        }
+
         appElement = AXUIElementCreateApplication(pid)
 
         var obs: AXObserver?
