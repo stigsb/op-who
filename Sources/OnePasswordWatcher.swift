@@ -10,6 +10,7 @@ class OnePasswordWatcher {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var trackedDialogElement: AXUIElement?
     private var dialogPollTimer: Timer?
+    private var trackedProcessPIDs: Set<pid_t> = []
 
     private static let bundleIDs = [
         "com.1password.1password",
@@ -108,39 +109,47 @@ class OnePasswordWatcher {
         NSLog("[op-who] Detached from 1Password")
     }
 
-    /// Check whether the AX element looks like a 1Password CLI approval dialog
-    /// by inspecting role, subrole, and child static text content.
+    /// Check whether the AX element looks like a 1Password approval dialog.
+    ///
+    /// 1Password renders its UI in an Electron web view. The AX tree is often
+    /// empty or incomplete when the window first appears, making content-based
+    /// detection unreliable.  Instead we use a two-tier approach:
+    ///
+    /// 1. AXDialog subrole → always an approval dialog.
+    /// 2. AXStandardWindow → accept unless the window title matches a known
+    ///    non-dialog surface (vault browser, lock screen, settings, etc.).
+    ///    The actual approval confirmation is deferred to `handleWindowEvent`
+    ///    which checks for triggering processes.
     private func isApprovalDialog(_ element: AXUIElement) -> Bool {
         // Must be a window
         guard axStringAttribute(element, kAXRoleAttribute) == "AXWindow" else {
             return false
         }
 
-        // Approval dialogs use the AXDialog subrole; other windows (e.g. the
-        // vault browser) use AXStandardWindow.
         let subrole = axStringAttribute(element, kAXSubroleAttribute)
         if subrole == "AXDialog" {
             return true
         }
 
-        // Some 1Password versions may present the approval UI as a standard
-        // window. Fall back to scanning visible static text for CLI-related
-        // keywords that appear in the approval prompt.
-        let keywords = [
-            "command-line", "command line", "CLI",
-            "wants to access", "is trying to",
-            "Authorize", "Deny",
+        // For standard windows, exclude known non-dialog surfaces by title.
+        let title = axStringAttribute(element, kAXTitleAttribute) ?? ""
+        let nonDialogPatterns = [
+            "Lock Screen",
+            "All Items",
+            "All Accounts",
+            "Settings",
+            "Watchtower",
+            "Developer",
         ]
-        let texts = collectStaticTexts(element)
-        let matched = texts.contains { text in
-            keywords.contains { text.localizedCaseInsensitiveContains($0) }
-        }
-        if matched {
-            return true
+        let isKnownNonDialog = nonDialogPatterns.contains { title.localizedCaseInsensitiveContains($0) }
+        if isKnownNonDialog {
+            return false
         }
 
-        NSLog("[op-who] Ignoring non-approval window (subrole: \(subrole ?? "nil"), texts: \(texts.prefix(5)))")
-        return false
+        // Any other 1Password window (including the generic "1Password" title
+        // used for SSH and CLI approval dialogs) — treat as potential approval.
+        NSLog("[op-who] Potential approval window (title: \"\(title)\", subrole: \(subrole ?? "nil"))")
+        return true
     }
 
     /// Return the string value of an AX attribute, or nil.
@@ -152,42 +161,27 @@ class OnePasswordWatcher {
         return value as? String
     }
 
-    /// Recursively collect AXStaticText values from a UI element tree (capped depth).
-    private func collectStaticTexts(_ element: AXUIElement, depth: Int = 0) -> [String] {
-        guard depth < 8 else { return [] }
-
-        var results: [String] = []
-
-        if axStringAttribute(element, kAXRoleAttribute) == "AXStaticText",
-           let value = axStringAttribute(element, kAXValueAttribute) {
-            results.append(value)
-        }
-
-        var childrenRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-              let children = childrenRef as? [AXUIElement] else {
-            return results
-        }
-
-        for child in children {
-            results.append(contentsOf: collectStaticTexts(child, depth: depth + 1))
-        }
-        return results
-    }
-
     fileprivate func handleWindowEvent(element: AXUIElement) {
         guard isApprovalDialog(element) else { return }
 
-        let opProcs = ProcessTree.findOpProcesses()
-        guard !opProcs.isEmpty else { return }
+        // Find trigger processes: `op` (CLI) and SSH client processes.
+        // Uses a single process scan to avoid duplicate work.  Signature
+        // verification of `op` binaries is deferred to chain-building time
+        // so it doesn't block the initial detection.
+        let triggerProcs = ProcessTree.findTriggerProcesses()
+        NSLog("[op-who] Found \(triggerProcs.count) trigger process(es)")
+        guard !triggerProcs.isEmpty else {
+            NSLog("[op-who] No trigger processes found, skipping overlay")
+            return
+        }
 
         let windowFrame = axWindowFrame(element) ?? axWindowFrame(appElement)
 
         var entries: [OverlayPanel.ProcessEntry] = []
-        for proc in opProcs {
+        for proc in triggerProcs {
             let result = ProcessTree.buildChain(from: proc.pid)
-
-            // Skip op processes with no meaningful context (e.g. spawned by 1Password itself)
+            // Skip processes with no meaningful context (e.g. 1Password's own
+            // internal `op` helper which has no parent chain and no TTY).
             if result.chain.count <= 1 && result.tty == nil { continue }
 
             let tabTitle = result.tty.flatMap { tty in
@@ -205,20 +199,27 @@ class OnePasswordWatcher {
                 claudeSession = nil
             }
 
+            // Get CWD from the chain — the trigger process (op, ssh) often
+            // has CWD of "/", so walk up to find the shell's CWD instead.
+            let cwd = ProcessTree.bestCWD(chain: result.chain)
+                .map(ProcessTree.tidyPath)
+
             entries.append(OverlayPanel.ProcessEntry(
                 pid: proc.pid,
                 chain: result.chain,
                 tty: result.tty,
                 tabTitle: tabTitle,
                 claudeSession: claudeSession,
-                terminalBundleID: result.terminalBundleID
+                terminalBundleID: result.terminalBundleID,
+                cwd: cwd
             ))
         }
 
         guard !entries.isEmpty else { return }
 
-        // Track the dialog window so we can dismiss when it closes
+        // Track the dialog window and triggering PIDs so we can dismiss when it closes
         trackedDialogElement = element
+        trackedProcessPIDs = Set(entries.map { $0.pid })
         startDialogPolling()
 
         DispatchQueue.main.async { [weak self] in
@@ -246,6 +247,7 @@ class OnePasswordWatcher {
         dialogPollTimer?.invalidate()
         dialogPollTimer = nil
         trackedDialogElement = nil
+        trackedProcessPIDs = []
     }
 
     private func checkDialogStillOpen() {
@@ -259,11 +261,11 @@ class OnePasswordWatcher {
             windowGone = true
         }
 
-        // Check 2: are there still op processes running?
-        let opProcs = ProcessTree.findOpProcesses()
-        let opsGone = opProcs.isEmpty
+        // Check 2: are the triggering processes still running?
+        // Use kill(pid, 0) — sends no signal but returns whether the process exists.
+        let procsGone = !trackedProcessPIDs.isEmpty && trackedProcessPIDs.allSatisfy { kill($0, 0) != 0 }
 
-        if windowGone || opsGone {
+        if windowGone || procsGone {
             DispatchQueue.main.async { [weak self] in
                 self?.overlayPanel?.dismiss()
                 self?.stopDialogPolling()
