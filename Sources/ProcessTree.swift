@@ -56,6 +56,20 @@ enum ProcessTree {
             .map(verifiedOpNode)
     }
 
+    /// Find running processes that are likely SSH agent clients.
+    static func findSSHAgentClients() -> [ProcessNode] {
+        let sshCommands: Set<String> = ["ssh", "git", "scp", "sftp", "rsync"]
+        return allProcesses().filter { sshCommands.contains($0.name) }
+    }
+
+    /// Find all trigger processes (op + SSH clients) in a single process scan.
+    /// Does NOT perform signature verification — that is deferred to chain
+    /// building so it doesn't block initial detection.
+    static func findTriggerProcesses() -> [ProcessNode] {
+        let triggerNames: Set<String> = ["op", "ssh", "git", "scp", "sftp", "rsync"]
+        return allProcesses().filter { triggerNames.contains($0.name) }
+    }
+
     /// Walk the parent chain from a PID, stopping at Mac app processes or launchd.
     static func buildChain(from pid: pid_t) -> ChainResult {
         let all = allProcesses()
@@ -188,6 +202,52 @@ enum ProcessTree {
             return URL(fileURLWithPath: cwd).lastPathComponent
         }
         return nil
+    }
+
+    /// Return the current working directory of a process, or nil.
+    /// Uses proc_pidinfo for a direct kernel query (faster and more reliable
+    /// than lsof, which can return stale or incorrect results in some
+    /// terminal multiplexers).
+    static func processCWD(pid: pid_t) -> String? {
+        var pathInfo = proc_vnodepathinfo()
+        let size = MemoryLayout<proc_vnodepathinfo>.size
+        let ret = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &pathInfo, Int32(size))
+        guard ret == size else { return nil }
+
+        return withUnsafePointer(to: pathInfo.pvi_cdir.vip_path) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                let s = String(cString: $0)
+                return s.isEmpty ? nil : s
+            }
+        }
+    }
+
+    /// Walk a process chain and return the most meaningful CWD.
+    /// The trigger process (op, ssh) often runs with CWD "/", so we prefer
+    /// the first ancestor that has a real working directory.
+    static func bestCWD(chain: [ProcessNode]) -> String? {
+        for node in chain {
+            if let cwd = processCWD(pid: node.pid), cwd != "/" {
+                return cwd
+            }
+        }
+        // Fall back to "/" if that's all we have
+        if let first = chain.first {
+            return processCWD(pid: first.pid)
+        }
+        return nil
+    }
+
+    /// Tidy a path for display: replace $HOME with ~.
+    static func tidyPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home {
+            return "~"
+        }
+        if path.hasPrefix(home + "/") {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 
     // MARK: - Private

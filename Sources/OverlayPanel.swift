@@ -9,6 +9,7 @@ class OverlayPanel {
         let tabTitle: String?
         let claudeSession: String?
         let terminalBundleID: String?
+        let cwd: String?
     }
 
     private var panel: NSPanel?
@@ -103,6 +104,18 @@ class OverlayPanel {
         // Process chain
         let chainLabel = makeChainLabel(entry.chain)
         stack.addArrangedSubview(chainLabel)
+
+        // Working directory
+        if let cwd = entry.cwd {
+            let cwdLabel = makeLabel(
+                cwd,
+                size: 11, weight: .regular, color: .secondaryLabelColor, mono: true
+            )
+            cwdLabel.lineBreakMode = .byTruncatingHead
+            cwdLabel.maximumNumberOfLines = 1
+            cwdLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            stack.addArrangedSubview(cwdLabel)
+        }
 
         // Claude session info
         if let session = entry.claudeSession {
@@ -215,6 +228,15 @@ class OverlayPanel {
 
     @objc private func sendTTYMessage(_ sender: NSButton) {
         guard let tty = sender.cell?.representedObject as? String else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Send message to terminal?"
+        alert.informativeText = "This will write a notification line to \(tty). The message does not execute any commands."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Send")
+        alert.addButton(withTitle: "Cancel")
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         TerminalHelper.writeMessage(to: tty, message: "\n[op-who] 1Password approval requested from this session\n")
     }
 }
