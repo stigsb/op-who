@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from tag
         id: version
@@ -109,7 +109,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           SHA256="${{ steps.sha.outputs.sha256 }}"
 
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/sunstoneinstitute/homebrew-tap.git" "$RUNNER_TEMP/tap"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/stigsb/homebrew-tap.git" "$RUNNER_TEMP/tap"
           cd "$RUNNER_TEMP/tap"
 
           mkdir -p Casks
@@ -118,15 +118,15 @@ jobs:
             version "${VERSION}"
             sha256 "${SHA256}"
 
-            url "https://github.com/sunstoneinstitute/op-who/releases/download/v#{version}/op-who.zip"
+            url "https://github.com/stigsb/op-who/releases/download/v#{version}/op-who.zip"
             name "op-who"
             desc "Shows which process triggered a 1Password approval dialog"
-            homepage "https://github.com/sunstoneinstitute/op-who"
+            homepage "https://github.com/stigsb/op-who"
 
             app "op-who.app"
 
             zap trash: [
-              "~/Library/Preferences/ai.sunstoneinstitute.op-who.plist",
+              "~/Library/Preferences/com.stigbakken.op-who.plist",
             ]
           end
           CASK

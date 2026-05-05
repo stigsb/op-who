@@ -217,13 +217,32 @@ public class OnePasswordWatcher {
 
         guard !entries.isEmpty else { return }
 
+        // Deduplicate entries sharing the same TTY — keep the one with the
+        // longest chain (most context).  Entries without a TTY are kept as-is.
+        var bestByTTY: [String: OverlayPanel.ProcessEntry] = [:]
+        var noTTY: [OverlayPanel.ProcessEntry] = []
+        for entry in entries {
+            if let tty = entry.tty {
+                if let existing = bestByTTY[tty] {
+                    if entry.chain.count > existing.chain.count {
+                        bestByTTY[tty] = entry
+                    }
+                } else {
+                    bestByTTY[tty] = entry
+                }
+            } else {
+                noTTY.append(entry)
+            }
+        }
+        let dedupedEntries = Array(bestByTTY.values) + noTTY
+
         // Track the dialog window and triggering PIDs so we can dismiss when it closes
         trackedDialogElement = element
-        trackedProcessPIDs = Set(entries.map { $0.pid })
+        trackedProcessPIDs = Set(entries.map { $0.pid })  // Track ALL trigger PIDs, not just deduped
         startDialogPolling()
 
         DispatchQueue.main.async { [weak self] in
-            self?.showOverlay(entries: entries, near: windowFrame)
+            self?.showOverlay(entries: dedupedEntries, near: windowFrame)
         }
     }
 
@@ -252,25 +271,54 @@ public class OnePasswordWatcher {
 
     private func checkDialogStillOpen() {
         // Check 1: is the tracked window still alive?
+        // 1Password's Electron web view can invalidate the AX element reference
+        // when it re-renders asynchronously.  When the cached element looks gone,
+        // re-scan 1Password's windows before concluding the dialog closed.
         var titleValue: AnyObject?
-        let windowGone: Bool
+        var windowGone: Bool
+        var initialAXErr: AXError = .success
         if let el = trackedDialogElement {
             let err = AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &titleValue)
+            initialAXErr = err
             windowGone = (err != .success)
         } else {
             windowGone = true
         }
 
+        var rescanOutcome: String = "n/a"
+        if windowGone, let app = appElement {
+            // The cached element is stale — check if an approval dialog still exists.
+            if let freshElement = findApprovalDialog(in: app) {
+                trackedDialogElement = freshElement
+                windowGone = false
+                rescanOutcome = "found-fresh-dialog"
+            } else {
+                rescanOutcome = "no-dialog-found"
+            }
+        }
+
         // Check 2: are the triggering processes still running?
         // Use kill(pid, 0) — sends no signal but returns whether the process exists.
-        let procsGone = !trackedProcessPIDs.isEmpty && trackedProcessPIDs.allSatisfy { kill($0, 0) != 0 }
+        let livePIDs = trackedProcessPIDs.filter { kill($0, 0) == 0 }
+        let procsGone = !trackedProcessPIDs.isEmpty && livePIDs.isEmpty
 
         if windowGone || procsGone {
+            NSLog("[op-who] Dismissing overlay: windowGone=\(windowGone) (initialAXErr=\(initialAXErr.rawValue), rescan=\(rescanOutcome)) procsGone=\(procsGone) tracked=\(trackedProcessPIDs.sorted()) live=\(livePIDs.sorted())")
             DispatchQueue.main.async { [weak self] in
                 self?.overlayPanel?.dismiss()
                 self?.stopDialogPolling()
             }
         }
+    }
+
+    /// Enumerate 1Password's windows and return the first that looks like an approval dialog.
+    private func findApprovalDialog(in app: AXUIElement) -> AXUIElement? {
+        var windowsValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+              let windows = windowsValue as? [AXUIElement] else {
+            return nil
+        }
+        return windows.first { isApprovalDialog($0) }
     }
 
     private func axWindowFrame(_ element: AXUIElement?) -> CGRect? {

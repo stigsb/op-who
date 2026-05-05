@@ -152,61 +152,25 @@ public enum ProcessTree {
         chain.map { $0.chainDisplayName }.joined(separator: " \u{2192} ")
     }
 
-    /// Try to detect a Claude Code session name from a claude/node process.
-    /// Looks at open file descriptors for paths containing .claude/projects/.
+    /// Detect a Claude Code session name from a claude/node process.
+    ///
+    /// Uses the process's CWD (via `proc_pidinfo`) and returns the last path
+    /// component as the session name. The Bun-compiled `claude` binary
+    /// (Homebrew install) does not keep session JSONL files open as long-lived
+    /// file descriptors, so any approach that scans `lsof` output for
+    /// `.claude/projects/` paths will miss them. The CWD is set to the project
+    /// directory by both the Bun and Node builds, so the basename is a stable
+    /// proxy for the session/project name.
     public static func claudeSessionInfo(pid: pid_t) -> String? {
-        // Use lsof to find open files — more reliable than raw proc APIs from Swift
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        task.arguments = ["-p", "\(pid)", "-Fn"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
+        return sessionName(fromCWD: processCWD(pid: pid))
+    }
 
-        do {
-            try task.run()
-        } catch {
-            return nil
-        }
-        task.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else { return nil }
-
-        // Look for paths like ~/.claude/projects/<project>/<session-file>
-        // or the CWD (current working directory line starts with "n" after a "cwd" fd)
-        var cwd: String? = nil
-        for line in output.split(separator: "\n") {
-            let str = String(line)
-            if str.hasPrefix("n") {
-                let path = String(str.dropFirst())
-                if path.contains(".claude/projects/") {
-                    // Try to extract project path from the claude directory structure
-                    // Format: ~/.claude/projects/-Users-foo-project/
-                    if let range = path.range(of: ".claude/projects/") {
-                        let afterProjects = String(path[range.upperBound...])
-                        let projectDir = afterProjects.split(separator: "/").first.map(String.init) ?? ""
-                        // Decode: -Users-foo-project → /Users/foo/project
-                        let decoded = projectDir.replacingOccurrences(of: "-", with: "/")
-                        // Return just the last path component as a readable name
-                        let projectName = decoded.split(separator: "/").last.map(String.init)
-                        if let name = projectName, !name.isEmpty {
-                            return name
-                        }
-                    }
-                }
-                // Track CWD as fallback
-                if cwd == nil, path.hasPrefix("/"), !path.contains(".claude") {
-                    cwd = path
-                }
-            }
-        }
-
-        // Fallback: use CWD basename
-        if let cwd = cwd {
-            return URL(fileURLWithPath: cwd).lastPathComponent
-        }
-        return nil
+    /// Pure helper: derive a session name from a CWD path.
+    /// Returns nil for paths that don't carry useful session context.
+    static func sessionName(fromCWD cwd: String?) -> String? {
+        guard let cwd = cwd, cwd != "/", !cwd.isEmpty else { return nil }
+        let name = (cwd as NSString).lastPathComponent
+        return name.isEmpty ? nil : name
     }
 
     /// Return the current working directory of a process, or nil.

@@ -93,4 +93,28 @@ struct ProcessTreeTests {
         let cwd = ProcessTree.processCWD(pid: -1)
         #expect(cwd == nil)
     }
+
+    @Test func sessionNameFromProjectPath() {
+        #expect(ProcessTree.sessionName(fromCWD: "/Users/foo/git/op-who") == "op-who")
+    }
+
+    @Test func sessionNameFromHomeSubdir() {
+        #expect(ProcessTree.sessionName(fromCWD: "/Users/foo/Projects/myapp") == "myapp")
+    }
+
+    @Test func sessionNameTrailingSlash() {
+        #expect(ProcessTree.sessionName(fromCWD: "/Users/foo/git/op-who/") == "op-who")
+    }
+
+    @Test func sessionNameRoot() {
+        #expect(ProcessTree.sessionName(fromCWD: "/") == nil)
+    }
+
+    @Test func sessionNameNil() {
+        #expect(ProcessTree.sessionName(fromCWD: nil) == nil)
+    }
+
+    @Test func sessionNameEmpty() {
+        #expect(ProcessTree.sessionName(fromCWD: "") == nil)
+    }
 }
