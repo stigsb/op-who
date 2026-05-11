@@ -52,7 +52,25 @@ public enum ProcessTree {
         "dev.warp.Warp",
         "io.cmux",
         "com.cmux.cmux",
+        "com.cmuxterm.app",
     ]
+
+    /// Process-name prefixes for internal helpers of a terminal app. When we
+    /// see one of these while walking the chain we terminate the walk and
+    /// attribute it to the matching terminal bundle ID — the helper itself
+    /// adds no information for the user (and on iTerm the helper name like
+    /// "iTermServer-3.6.X" is truncated by macOS to 15 chars, which looks
+    /// like garbage in the overlay).
+    private static let terminalHelperPrefixes: [(prefix: String, bundleID: String)] = [
+        ("iTermServer", "com.googlecode.iterm2"),
+    ]
+
+    private static func matchTerminalHelper(name: String) -> String? {
+        for (prefix, bid) in terminalHelperPrefixes where name.hasPrefix(prefix) {
+            return bid
+        }
+        return nil
+    }
 
     /// Find all running processes named "op".
     public static func findOpProcesses() -> [ProcessNode] {
@@ -108,6 +126,16 @@ public enum ProcessTree {
                     terminalPID = current
                 }
                 // Don't include the Mac app itself — 1Password already shows it
+                break
+            }
+
+            // Check if this is a terminal-helper process (e.g. iTermServer).
+            // The helper isn't an NSWorkspace app, but it stands in for one.
+            if let helperBundle = Self.matchTerminalHelper(name: proc.name) {
+                if terminalBundleID == nil {
+                    terminalBundleID = helperBundle
+                    terminalPID = current
+                }
                 break
             }
 
@@ -171,6 +199,17 @@ public enum ProcessTree {
         guard let cwd = cwd, cwd != "/", !cwd.isEmpty else { return nil }
         let name = (cwd as NSString).lastPathComponent
         return name.isEmpty ? nil : name
+    }
+
+    /// Return the wall-clock start time of a process, or nil if unavailable.
+    public static func processStartTime(pid: pid_t) -> Date? {
+        var info = proc_bsdinfo()
+        let size = MemoryLayout<proc_bsdinfo>.size
+        let r = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(size))
+        guard r == Int32(size) else { return nil }
+        let secs = Double(info.pbi_start_tvsec)
+        let usecs = Double(info.pbi_start_tvusec) / 1_000_000.0
+        return Date(timeIntervalSince1970: secs + usecs)
     }
 
     /// Return the current working directory of a process, or nil.
@@ -273,6 +312,115 @@ public enum ProcessTree {
 
         // KERN_PROCARGS2 format: argc (int32), then exec path, then NUL-padded args
         return String(decoding: buffer.prefix(min(size, 4096)), as: UTF8.self)
+    }
+
+    /// Return the full argv of a running process, or [] if unavailable.
+    ///
+    /// Parses KERN_PROCARGS2 directly: `[argc:int32][exec_path\0...padding\0][argv[0]\0argv[1]\0...]`.
+    /// Stops at argc strings so we don't bleed into the env block.
+    public static func processArgv(pid: pid_t) -> [String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size: Int = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return [] }
+
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        return parseArgv(rawProcargs2: buffer)
+    }
+
+    /// Return selected environment variables for a process.
+    ///
+    /// We never expose the full environment to callers — env can contain
+    /// secrets, tokens, and PATHs that have no business in an overlay. The
+    /// caller supplies the exact set of names it wants extracted.
+    public static func processEnvironment(pid: pid_t, names: Set<String>) -> [String: String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size: Int = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return [:] }
+
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [:] }
+        return parseEnvironment(rawProcargs2: buffer, names: names)
+    }
+
+    /// Pure parser exposed for tests.
+    static func parseEnvironment(rawProcargs2 buffer: [UInt8], names: Set<String>) -> [String: String] {
+        guard buffer.count >= 4 else { return [:] }
+        let argc =
+            Int(buffer[0])
+            | Int(buffer[1]) << 8
+            | Int(buffer[2]) << 16
+            | Int(buffer[3]) << 24
+        guard argc >= 0 else { return [:] }
+
+        // Skip exec_path + padding (until first non-NUL after the path),
+        // then skip argc null-terminated argv strings to land on the envp block.
+        var i = 4
+        while i < buffer.count && buffer[i] != 0 { i += 1 }
+        while i < buffer.count && buffer[i] == 0 { i += 1 }
+
+        var consumed = 0
+        while consumed < argc && i < buffer.count {
+            while i < buffer.count && buffer[i] != 0 { i += 1 }
+            if i < buffer.count { i += 1 }  // skip terminator
+            consumed += 1
+        }
+
+        // Now read env strings until empty entry or end of buffer.
+        var env: [String: String] = [:]
+        var start = i
+        while i < buffer.count {
+            if buffer[i] == 0 {
+                if start == i { break }  // empty entry terminates envp
+                let bytes = Array(buffer[start..<i])
+                if let s = String(bytes: bytes, encoding: .utf8),
+                   let eq = s.firstIndex(of: "=") {
+                    let key = String(s[..<eq])
+                    if names.contains(key) {
+                        env[key] = String(s[s.index(after: eq)...])
+                    }
+                    if env.count == names.count { return env }
+                }
+                i += 1
+                start = i
+            } else {
+                i += 1
+            }
+        }
+        return env
+    }
+
+    /// Pure parser exposed for tests.
+    static func parseArgv(rawProcargs2 buffer: [UInt8]) -> [String] {
+        guard buffer.count >= 4 else { return [] }
+
+        // argc is a little-endian uint32 on all Apple-supported architectures.
+        let argc =
+            Int(buffer[0])
+            | Int(buffer[1]) << 8
+            | Int(buffer[2]) << 16
+            | Int(buffer[3]) << 24
+        guard argc > 0 else { return [] }
+
+        var i = 4
+        // Skip exec_path: read until first NUL, then over any NUL padding.
+        while i < buffer.count && buffer[i] != 0 { i += 1 }
+        while i < buffer.count && buffer[i] == 0 { i += 1 }
+
+        var argv: [String] = []
+        argv.reserveCapacity(argc)
+        var start = i
+        while argv.count < argc && i < buffer.count {
+            if buffer[i] == 0 {
+                let bytes = Array(buffer[start..<i])
+                argv.append(String(bytes: bytes, encoding: .utf8) ?? "")
+                i += 1
+                start = i
+            } else {
+                i += 1
+            }
+        }
+        return argv
     }
 
     /// Check if a running process (by PID) is signed by 1Password's Team ID.
