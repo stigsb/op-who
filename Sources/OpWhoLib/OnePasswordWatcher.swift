@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import os
 
 /// Watches for 1Password approval dialogs via the Accessibility API
 /// and shows a process-tree overlay when one appears.
@@ -71,7 +72,7 @@ public class OnePasswordWatcher {
         let pid = app.processIdentifier
 
         guard ProcessTree.isRunningProcessSignedByOnePassword(pid: pid) else {
-            NSLog("[op-who] Refusing to attach: 1Password app (pid \(pid)) failed code signature verification")
+            Log.watcher.error("Refusing to attach: 1Password app (pid \(pid, privacy: .public)) failed code signature verification")
             return
         }
 
@@ -80,7 +81,7 @@ public class OnePasswordWatcher {
         var obs: AXObserver?
         let err = AXObserverCreate(pid, axCallbackFunction, &obs)
         guard err == .success, let obs = obs else {
-            NSLog("[op-who] Failed to create AXObserver: \(err.rawValue)")
+            Log.watcher.error("Failed to create AXObserver: \(err.rawValue, privacy: .public)")
             return
         }
         observer = obs
@@ -96,7 +97,7 @@ public class OnePasswordWatcher {
             .defaultMode
         )
 
-        NSLog("[op-who] Attached to 1Password (pid \(pid))")
+        Log.watcher.info("Attached to 1Password (pid \(pid, privacy: .public))")
     }
 
     private func detach() {
@@ -106,7 +107,7 @@ public class OnePasswordWatcher {
         }
         observer = nil
         appElement = nil
-        NSLog("[op-who] Detached from 1Password")
+        Log.watcher.info("Detached from 1Password")
     }
 
     /// Check whether the AX element looks like a 1Password approval dialog.
@@ -148,7 +149,7 @@ public class OnePasswordWatcher {
 
         // Any other 1Password window (including the generic "1Password" title
         // used for SSH and CLI approval dialogs) — treat as potential approval.
-        NSLog("[op-who] Potential approval window (title: \"\(title)\", subrole: \(subrole ?? "nil"))")
+        Log.watcher.info("Potential approval window (title: \"\(title, privacy: .public)\", subrole: \(subrole ?? "nil", privacy: .public))")
         return true
     }
 
@@ -169,20 +170,34 @@ public class OnePasswordWatcher {
         // verification of `op` binaries is deferred to chain-building time
         // so it doesn't block the initial detection.
         let triggerProcs = ProcessTree.findTriggerProcesses()
-        NSLog("[op-who] Found \(triggerProcs.count) trigger process(es)")
+        Log.watcher.info("Found \(triggerProcs.count, privacy: .public) trigger process(es)")
         guard !triggerProcs.isEmpty else {
-            NSLog("[op-who] No trigger processes found, skipping overlay")
+            Log.watcher.info("No trigger processes found, skipping overlay")
             return
         }
 
         let windowFrame = axWindowFrame(element) ?? axWindowFrame(appElement)
 
-        var entries: [OverlayPanel.ProcessEntry] = []
+        var candidates: [TriggerCandidate] = []
         for proc in triggerProcs {
             let result = ProcessTree.buildChain(from: proc.pid)
             // Skip processes with no meaningful context (e.g. 1Password's own
             // internal `op` helper which has no parent chain and no TTY).
             if result.chain.count <= 1 && result.tty == nil { continue }
+
+            // Fold an `op` helper child into its `op` parent, so the trigger
+            // we render reflects the user-invoked command, not the helper.
+            let foldedChain = foldOpHelper(chain: result.chain)
+            let triggerNode = foldedChain.first ?? result.chain.first ?? proc
+            let triggerPID = triggerNode.pid
+
+            // `git` triggers that aren't network-capable (`git show`, `git log`,
+            // etc.) can never have prompted a 1Password SSH approval, so they
+            // are noise — drop them before they hit the overlay.
+            let triggerArgv = ProcessTree.processArgv(pid: triggerPID)
+            if triggerNode.name == "git", !isRemoteGitSubcommand(argv: triggerArgv) {
+                continue
+            }
 
             let tabTitle = result.tty.flatMap { tty in
                 TerminalHelper.tabTitle(
@@ -193,56 +208,108 @@ public class OnePasswordWatcher {
             }
 
             let claudeSession: String?
+            let claudeCtx: ClaudeContext?
             if let claudePID = result.claudePID {
                 claudeSession = ProcessTree.claudeSessionInfo(pid: claudePID)
+                if let claudeCWD = ProcessTree.processCWD(pid: claudePID) {
+                    claudeCtx = claudeContext(forCWD: claudeCWD)
+                } else {
+                    claudeCtx = nil
+                }
             } else {
                 claudeSession = nil
+                claudeCtx = nil
             }
 
             // Get CWD from the chain — the trigger process (op, ssh) often
             // has CWD of "/", so walk up to find the shell's CWD instead.
-            let cwd = ProcessTree.bestCWD(chain: result.chain)
+            let cwd = ProcessTree.bestCWD(chain: foldedChain)
                 .map(ProcessTree.tidyPath)
 
-            entries.append(OverlayPanel.ProcessEntry(
-                pid: proc.pid,
-                chain: result.chain,
+            // For cmux, pull the workspace / tab identifiers from the trigger's
+            // env block AND ask cmux itself for the user-facing workspace name
+            // and tab title — those are user-renameable and the env-IDs are not.
+            var cmuxWorkspaceID: String? = nil
+            var cmuxTabID: String? = nil
+            var cmuxSurface: CmuxSurfaceInfo? = nil
+            if isCmuxBundleID(result.terminalBundleID) {
+                let env = ProcessTree.processEnvironment(
+                    pid: triggerPID,
+                    names: ["CMUX_WORKSPACE_ID", "CMUX_TAB_ID"]
+                )
+                cmuxWorkspaceID = env["CMUX_WORKSPACE_ID"]
+                cmuxTabID = env["CMUX_TAB_ID"]
+                if let tty = result.tty {
+                    cmuxSurface = CmuxHelper.surfaceInfo(forTTY: tty)
+                }
+            }
+
+            let entryStartTime = ProcessTree.processStartTime(pid: triggerPID)
+
+            let entry = OverlayPanel.ProcessEntry(
+                pid: triggerPID,
+                chain: foldedChain,
+                triggerArgv: triggerArgv,
                 tty: result.tty,
+                tabTitle: tabTitle,
+                claudeSession: claudeSession,
+                claudeContext: claudeCtx,
+                terminalBundleID: result.terminalBundleID,
+                terminalPID: result.terminalPID,
+                cwd: cwd,
+                cmuxWorkspaceID: cmuxWorkspaceID,
+                cmuxTabID: cmuxTabID,
+                cmuxSurface: cmuxSurface,
+                startTime: entryStartTime
+            )
+
+            let kind = makeRequestSummary(
+                chain: foldedChain,
+                triggerArgv: triggerArgv,
                 tabTitle: tabTitle,
                 claudeSession: claudeSession,
                 terminalBundleID: result.terminalBundleID,
                 cwd: cwd
+            ).kind
+
+            candidates.append(TriggerCandidate(
+                entry: entry,
+                kind: kind,
+                startTime: ProcessTree.processStartTime(pid: triggerPID)
             ))
         }
 
-        guard !entries.isEmpty else { return }
-
-        // Deduplicate entries sharing the same TTY — keep the one with the
-        // longest chain (most context).  Entries without a TTY are kept as-is.
-        var bestByTTY: [String: OverlayPanel.ProcessEntry] = [:]
-        var noTTY: [OverlayPanel.ProcessEntry] = []
-        for entry in entries {
-            if let tty = entry.tty {
-                if let existing = bestByTTY[tty] {
-                    if entry.chain.count > existing.chain.count {
-                        bestByTTY[tty] = entry
-                    }
-                } else {
-                    bestByTTY[tty] = entry
-                }
-            } else {
-                noTTY.append(entry)
-            }
+        guard let chosen = selectBestCandidate(candidates) else {
+            Log.watcher.info("No surviving trigger candidates after filter+fold")
+            return
         }
-        let dedupedEntries = Array(bestByTTY.values) + noTTY
 
-        // Track the dialog window and triggering PIDs so we can dismiss when it closes
+        // Suppress redundant re-shows. 1Password's Electron-rendered dialog
+        // fires multiple AXWindowCreated / AXFocusedWindowChanged events for
+        // a single logical approval (empty shell → re-render → real title
+        // resolved 5s later), and rebuilding the overlay on each event makes
+        // it appear to flash/relocate or — when timed against the user
+        // approving — look like "a second popup just appeared". If we're
+        // already polling for the same trigger PID, just update the tracked
+        // AX element and skip the re-render.
+        if dialogPollTimer != nil && trackedProcessPIDs.contains(chosen.entry.pid) {
+            Log.watcher.debug("re-detected same approval (pid \(chosen.entry.pid, privacy: .public)) — refresh only")
+            trackedDialogElement = element
+            return
+        }
+
+        let displayedEntries = [chosen.entry]
+
+        // Track the dialog window and the surviving trigger PID so we can
+        // dismiss when either disappears.
         trackedDialogElement = element
-        trackedProcessPIDs = Set(entries.map { $0.pid })  // Track ALL trigger PIDs, not just deduped
+        trackedProcessPIDs = Set(displayedEntries.map { $0.pid })
         startDialogPolling()
 
+        Log.watcher.debug("dialog-shown entries=\(jsonDump(entries: displayedEntries), privacy: .public) candidates=\(candidates.count, privacy: .public)")
+
         DispatchQueue.main.async { [weak self] in
-            self?.showOverlay(entries: dedupedEntries, near: windowFrame)
+            self?.showOverlay(entries: displayedEntries, near: windowFrame)
         }
     }
 
@@ -302,12 +369,21 @@ public class OnePasswordWatcher {
         let livePIDs = trackedProcessPIDs.filter { kill($0, 0) == 0 }
         let procsGone = !trackedProcessPIDs.isEmpty && livePIDs.isEmpty
 
-        if windowGone || procsGone {
-            NSLog("[op-who] Dismissing overlay: windowGone=\(windowGone) (initialAXErr=\(initialAXErr.rawValue), rescan=\(rescanOutcome)) procsGone=\(procsGone) tracked=\(trackedProcessPIDs.sorted()) live=\(livePIDs.sorted())")
-            DispatchQueue.main.async { [weak self] in
-                self?.overlayPanel?.dismiss()
-                self?.stopDialogPolling()
-            }
+        Log.watcher.debug("poll-tick windowGone=\(windowGone, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public) live=\(livePIDs.sorted(), privacy: .public)")
+
+        // Only the trigger process is authoritative. If it is still running,
+        // the dialog must still be pending — even if AX claims the window has
+        // gone (kAXErrorInvalidUIElement: -25202) and a rescan returns no
+        // dialog. Electron-rendered dialogs intermittently invalidate their
+        // AX element while remaining visible to the user, and acting on that
+        // would tear the overlay down prematurely. Process exit is the only
+        // signal we can fully trust.
+        guard procsGone else { return }
+
+        Log.watcher.info("Dismissing overlay: windowGone=\(windowGone, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) procsGone=true tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public) live=\(livePIDs.sorted(), privacy: .public)")
+        DispatchQueue.main.async { [weak self] in
+            self?.overlayPanel?.dismiss()
+            self?.stopDialogPolling()
         }
     }
 
@@ -338,6 +414,77 @@ public class OnePasswordWatcher {
 
         return CGRect(origin: pos, size: size)
     }
+}
+
+/// Serialize an array of ProcessEntry as a single-line JSON string for the
+/// unified log. Returns "[]" on any encoding error rather than throwing —
+/// debug logs must never crash a release build.
+func jsonDump(entries: [OverlayPanel.ProcessEntry]) -> String {
+    let payload: [[String: Any]] = entries.map { entry in
+        var dict: [String: Any] = [
+            "pid": entry.pid,
+            "chain": entry.chain.map { node -> [String: Any] in
+                var n: [String: Any] = [
+                    "pid": node.pid,
+                    "ppid": node.ppid,
+                    "name": node.name,
+                ]
+                if let tty = node.tty { n["tty"] = tty }
+                if let exe = node.executablePath { n["exe"] = exe }
+                if node.name == "op" {
+                    n["verifiedOnePasswordCLI"] = node.isVerifiedOnePasswordCLI
+                }
+                return n
+            },
+        ]
+        if let tty = entry.tty { dict["tty"] = tty }
+        if let title = entry.tabTitle { dict["tabTitle"] = title }
+        if let session = entry.claudeSession { dict["claudeSession"] = session }
+        if let bid = entry.terminalBundleID { dict["terminalBundleID"] = bid }
+        if let tpid = entry.terminalPID { dict["terminalPID"] = tpid }
+        if let cwd = entry.cwd { dict["cwd"] = cwd }
+        if !entry.triggerArgv.isEmpty { dict["triggerArgv"] = entry.triggerArgv }
+        if let ctx = entry.claudeContext {
+            var c: [String: Any] = ["sessionID": ctx.sessionID]
+            if let p = ctx.lastUserPrompt { c["lastUserPrompt"] = p }
+            if let cmd = ctx.lastRelevantCommand { c["lastRelevantCommand"] = cmd }
+            dict["claudeContext"] = c
+        }
+        if let ws = entry.cmuxWorkspaceID { dict["cmuxWorkspaceID"] = ws }
+        if let tab = entry.cmuxTabID { dict["cmuxTabID"] = tab }
+        if let s = entry.cmuxSurface {
+            dict["cmuxSurface"] = [
+                "workspaceRef": s.workspaceRef,
+                "workspaceTitle": s.workspaceTitle,
+                "surfaceRef": s.surfaceRef,
+                "surfaceTitle": s.surfaceTitle,
+                "tty": s.tty,
+            ]
+        }
+
+        let summary = makeRequestSummary(
+            chain: entry.chain,
+            triggerArgv: entry.triggerArgv,
+            tabTitle: entry.tabTitle,
+            claudeSession: entry.claudeSession,
+            terminalBundleID: entry.terminalBundleID,
+            cwd: entry.cwd
+        )
+        var s: [String: Any] = [
+            "kind": summary.kind.rawValue,
+            "title": summary.title,
+            "isWarning": summary.isWarning,
+        ]
+        if let sub = summary.subtitle { s["subtitle"] = sub }
+        dict["summary"] = s
+        return dict
+    }
+
+    guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+          let str = String(data: data, encoding: .utf8) else {
+        return "[]"
+    }
+    return str
 }
 
 private func axCallbackFunction(

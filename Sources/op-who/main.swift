@@ -1,6 +1,7 @@
 import AppKit
 import OpWhoLib
 import ServiceManagement
+import os
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
@@ -78,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func relaunchAfterTrustGranted() {
         let bundlePath = Bundle.main.bundlePath
-        NSLog("[op-who] Accessibility granted; relaunching from \(bundlePath)")
+        Log.app.info("Accessibility granted; relaunching from \(bundlePath, privacy: .public)")
 
         // Spawn a detached shell that waits for us to exit, then reopens the bundle.
         let escaped = bundlePath.replacingOccurrences(of: "'", with: "'\\''")
@@ -88,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             try task.run()
         } catch {
-            NSLog("[op-who] Failed to spawn relaunch helper: \(error)")
+            Log.app.error("Failed to spawn relaunch helper: \(String(describing: error), privacy: .public)")
             return
         }
         NSApp.terminate(nil)
