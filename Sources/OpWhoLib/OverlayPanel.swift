@@ -380,10 +380,13 @@ class OverlayPanel {
         let color: NSColor
         let weight: NSFont.Weight
         switch info.kind {
-        case .claude: color = .systemBlue; weight = .semibold
-        case .editor: color = .systemTeal; weight = .semibold
-        case .shell:  color = .labelColor; weight = .medium
-        case .other:  color = .labelColor; weight = .medium
+        // Distinct from the operation row's colors (which use systemBlue for
+        // .ssh and systemGreen for op CLI), so the "who" and "what" lines
+        // read as visually separate.
+        case .claude: color = .systemPurple; weight = .semibold
+        case .editor: color = .systemTeal;   weight = .semibold
+        case .shell:  color = .labelColor;   weight = .medium
+        case .other:  color = .labelColor;   weight = .medium
         }
         return makeIconRow(
             icon: appIcon(bundleID: info.bundleID),
