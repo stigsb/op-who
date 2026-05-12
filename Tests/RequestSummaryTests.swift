@@ -85,6 +85,35 @@ struct RequestSummaryTests {
         #expect(s.title.contains("signing"))
     }
 
+    @Test func operationDisplayCollapsesCommitSigningArgv() {
+        let chain = [node("op-ssh-sign"), node("git"), node("zsh")]
+        let argv = [
+            "/Applications/1Password.app/Contents/MacOS/op-ssh-sign",
+            "-Y", "sign", "-n", "git",
+            "-f", "/var/folders/jk/.../.git_signing_key_tmpXXXX",
+            "-U", "/var/folders/jk/.../.git_signing_buffer_tmpYYYY",
+        ]
+        let text = operationDisplay(argv: argv, chain: chain, cwd: "~/git/stigsb/op-who")
+        #expect(text == "signing a commit in ~/git/stigsb/op-who")
+    }
+
+    @Test func operationDisplayCommitSigningWithoutCwd() {
+        let chain = [node("ssh-keygen"), node("git"), node("zsh")]
+        let argv = ["/usr/bin/ssh-keygen", "-Y", "sign", "-n", "git", "-f", "/tmp/k"]
+        let text = operationDisplay(argv: argv, chain: chain, cwd: nil)
+        #expect(text == "signing a commit")
+    }
+
+    @Test func operationDisplayKeepsNonSigningSshKeygenArgv() {
+        // ssh-keygen used for keygen / fingerprint / etc. should NOT be
+        // collapsed — those are real argv worth showing.
+        let chain = [node("ssh-keygen"), node("zsh")]
+        let argv = ["/usr/bin/ssh-keygen", "-l", "-f", "~/.ssh/id_rsa.pub"]
+        let text = operationDisplay(argv: argv, chain: chain, cwd: nil)
+        #expect(text.contains("-l"))
+        #expect(text.contains("id_rsa.pub"))
+    }
+
     @Test func actorPrefersClaudeOverShell() {
         let chain = [node("op", verified: true), node("zsh"), node("claude")]
         let s = makeRequestSummary(

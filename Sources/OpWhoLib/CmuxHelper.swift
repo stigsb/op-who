@@ -9,6 +9,16 @@ public struct CmuxSurfaceInfo: Equatable {
     public let surfaceTitle: String              // raw cmux surface title
     public let surfaceType: String               // "terminal", "browser", etc.
     public let tty: String                       // bare ttysNN (no /dev/ prefix)
+    /// 1-based workspace position within its window; matches cmux's ⌘N
+    /// keyboard shortcut. 0 when unknown.
+    public let workspaceIndex: Int
+    /// 1-based panel position within its workspace; matches cmux's ⌃N
+    /// keyboard shortcut. 0 when unknown.
+    public let tabIndex: Int
+    /// Total number of panels in this surface's workspace. Used to suppress
+    /// the ⌃N hint when there's only one tab (the shortcut is trivial then).
+    /// 0 when unknown.
+    public let workspaceTabCount: Int
 
     public init(
         workspaceRef: String,
@@ -17,7 +27,10 @@ public struct CmuxSurfaceInfo: Equatable {
         surfaceRef: String,
         surfaceTitle: String,
         surfaceType: String = "terminal",
-        tty: String
+        tty: String,
+        workspaceIndex: Int = 0,
+        tabIndex: Int = 0,
+        workspaceTabCount: Int = 0
     ) {
         self.workspaceRef = workspaceRef
         self.workspaceTitle = workspaceTitle
@@ -26,6 +39,9 @@ public struct CmuxSurfaceInfo: Equatable {
         self.surfaceTitle = surfaceTitle
         self.surfaceType = surfaceType
         self.tty = tty
+        self.workspaceIndex = workspaceIndex
+        self.tabIndex = tabIndex
+        self.workspaceTabCount = workspaceTabCount
     }
 
     /// Workspace title best-suited for display. If cmux only has a generic
@@ -94,7 +110,8 @@ public enum CmuxHelper {
                     return nil
                 }()
                 let wsRef = "workspace:\(wi):\(wsi)"
-                for panel in ws.panels {
+                let panelCount = ws.panels.count
+                for (pi, panel) in ws.panels.enumerated() {
                     guard panel.type == "terminal",
                           let tty = nonEmpty(panel.ttyName) else { continue }
                     let bare = tty.hasPrefix("/dev/") ? String(tty.dropFirst("/dev/".count)) : tty
@@ -105,7 +122,10 @@ public enum CmuxHelper {
                         surfaceRef: "surface:\(panel.id)",
                         surfaceTitle: panel.title ?? "",
                         surfaceType: panel.type,
-                        tty: bare
+                        tty: bare,
+                        workspaceIndex: wsi + 1,
+                        tabIndex: pi + 1,
+                        workspaceTabCount: panelCount
                     )
                 }
             }

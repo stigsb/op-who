@@ -191,15 +191,39 @@ public func driverDescription(
 /// Format a trigger argv array as a one-line command for display.
 /// Strips path prefix on argv[0] so we show `op item list`, not
 /// `/usr/local/bin/op item list`.
-public func operationDisplay(argv: [String], chain: [ProcessNode]) -> String {
+///
+/// Special-cases SSH commit signing (`op-ssh-sign`, `ssh-keygen -Y sign -n git`):
+/// the real argv is dominated by tempfile paths and unreadable in the overlay,
+/// so we synthesize "signing a commit in <cwd>" instead.
+public func operationDisplay(argv: [String], chain: [ProcessNode], cwd: String? = nil) -> String {
     if argv.isEmpty {
         // No argv available (1Password helper, or a sandbox restriction).
         // Fall back to the trigger process name with no args.
         return chain.first?.name ?? "(unknown command)"
     }
+    let exe = (argv[0] as NSString).lastPathComponent
+    if isGitCommitSigning(exe: exe, argv: argv) {
+        if let cwd = cwd, !cwd.isEmpty {
+            return "signing a commit in \(cwd)"
+        }
+        return "signing a commit"
+    }
     var parts = argv
-    parts[0] = (parts[0] as NSString).lastPathComponent
+    parts[0] = exe
     return parts.joined(separator: " ")
+}
+
+/// Detect `op-ssh-sign` / `ssh-keygen` invoked specifically for git commit
+/// signing (`-n git`). Returns false for plain `ssh-keygen` keygen/conversion
+/// operations, which wouldn't be talking to the 1Password agent.
+private func isGitCommitSigning(exe: String, argv: [String]) -> Bool {
+    guard exe == "op-ssh-sign" || exe == "ssh-keygen" else { return false }
+    var sawSign = false
+    for a in argv.dropFirst() {
+        if a == "sign" { sawSign = true }
+        if a == "git" { return sawSign }  // `-n git` is the namespace flag value
+    }
+    return false
 }
 
 /// Parse `op` argv into a phrase like "read op://X/Y" or "use ‘op item get …’".

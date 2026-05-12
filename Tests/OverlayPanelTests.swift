@@ -196,4 +196,116 @@ struct OverlayPanelTerminalRowTextTests {
         )
         #expect(text == "iTerm")
     }
+
+    // MARK: - cmux keyboard-shortcut hints
+
+    @Test func cmuxSurfaceWithIndicesRendersShortcuts() {
+        let s = CmuxSurfaceInfo(
+            workspaceRef: "workspace:0:1",
+            workspaceTitle: "trusthere",
+            surfaceRef: "surface:25",
+            surfaceTitle: "main",
+            tty: "ttys021",
+            workspaceIndex: 2,
+            tabIndex: 1
+        )
+        let text = OverlayPanel.terminalRowText(
+            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
+            termName: "cmux"
+        )
+        #expect(text == "cmux workspace ‘trusthere’ ⌘2, tab ‘main’ ⌃1")
+    }
+
+    @Test func cmuxSurfaceCollapsesWhenTitlesMatch() {
+        // The case from the screenshot: cmux renders the workspace title and
+        // surface title as the same string (the CWD). Don't repeat the user.
+        let s = CmuxSurfaceInfo(
+            workspaceRef: "workspace:0:1",
+            workspaceTitle: "/Users/stig/git/stigsb/op-who",
+            surfaceRef: "surface:25",
+            surfaceTitle: "/Users/stig/git/stigsb/op-who",
+            tty: "ttys021",
+            workspaceIndex: 2,
+            tabIndex: 1
+        )
+        let text = OverlayPanel.terminalRowText(
+            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
+            termName: "cmux"
+        )
+        #expect(text == "cmux workspace+tab ‘/Users/stig/git/stigsb/op-who’ ⌘2 ⌃1")
+    }
+
+    @Test func cmuxSingleTabWorkspaceHidesTabShortcut() {
+        // When the workspace has exactly one tab, ⌃1 is trivial — hide it.
+        // ⌘N (workspace shortcut) is still useful and stays.
+        let s = CmuxSurfaceInfo(
+            workspaceRef: "workspace:0:1",
+            workspaceTitle: "trusthere",
+            surfaceRef: "surface:25",
+            surfaceTitle: "main",
+            tty: "ttys021",
+            workspaceIndex: 2,
+            tabIndex: 1,
+            workspaceTabCount: 1
+        )
+        let text = OverlayPanel.terminalRowText(
+            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
+            termName: "cmux"
+        )
+        #expect(text == "cmux workspace ‘trusthere’ ⌘2, tab ‘main’")
+    }
+
+    @Test func cmuxMultipleTabsKeepTabShortcut() {
+        let s = CmuxSurfaceInfo(
+            workspaceRef: "workspace:0:1",
+            workspaceTitle: "trusthere",
+            surfaceRef: "surface:25",
+            surfaceTitle: "main",
+            tty: "ttys021",
+            workspaceIndex: 2,
+            tabIndex: 1,
+            workspaceTabCount: 3
+        )
+        let text = OverlayPanel.terminalRowText(
+            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
+            termName: "cmux"
+        )
+        #expect(text == "cmux workspace ‘trusthere’ ⌘2, tab ‘main’ ⌃1")
+    }
+
+    @Test func cmuxCollapsedFormSuppressesTabShortcutForSingleTab() {
+        let s = CmuxSurfaceInfo(
+            workspaceRef: "workspace:0:1",
+            workspaceTitle: "/Users/stig/git/stigsb/op-who",
+            surfaceRef: "surface:25",
+            surfaceTitle: "/Users/stig/git/stigsb/op-who",
+            tty: "ttys021",
+            workspaceIndex: 2,
+            tabIndex: 1,
+            workspaceTabCount: 1
+        )
+        let text = OverlayPanel.terminalRowText(
+            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
+            termName: "cmux"
+        )
+        #expect(text == "cmux workspace+tab ‘/Users/stig/git/stigsb/op-who’ ⌘2")
+    }
+
+    @Test func cmuxSurfaceShortcutOnlyWhenIndexPresent() {
+        // 0 means "unknown index" — render no shortcut for that side.
+        let s = CmuxSurfaceInfo(
+            workspaceRef: "workspace:0:1",
+            workspaceTitle: "trusthere",
+            surfaceRef: "surface:25",
+            surfaceTitle: "main",
+            tty: "ttys021",
+            workspaceIndex: 0,
+            tabIndex: 3
+        )
+        let text = OverlayPanel.terminalRowText(
+            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
+            termName: "cmux"
+        )
+        #expect(text == "cmux workspace ‘trusthere’, tab ‘main’ ⌃3")
+    }
 }

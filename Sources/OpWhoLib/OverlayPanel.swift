@@ -319,13 +319,27 @@ class OverlayPanel {
         if let s = entry.cmuxSurface {
             let wsTitle = s.displayWorkspaceTitle
             let surfaceTitle = CmuxHelper.looksGenericTitle(s.surfaceTitle) ? "" : s.surfaceTitle
+            let wsKey = s.workspaceIndex > 0 ? " ⌘\(s.workspaceIndex)" : ""
+            // ⌃N is only useful when the user has more than one tab to switch
+            // between — otherwise ⌃1 is trivial. We keep showing it when the
+            // tab count is unknown (0) so we don't lose info on stale state.
+            let showTabKey = s.tabIndex > 0 && s.workspaceTabCount != 1
+            let tabKey = showTabKey ? " ⌃\(s.tabIndex)" : ""
+
+            // Collapse to one phrase when both labels resolve to the same
+            // string — repeating it tells the user nothing.
+            if !wsTitle.isEmpty && wsTitle == surfaceTitle {
+                let main = "\(termName) workspace+tab ‘\(wsTitle)’\(wsKey)\(tabKey)"
+                return TerminalRowParts(main: main, shortcut: nil)
+            }
+
             let ws = wsTitle.isEmpty ? "" : "‘\(wsTitle)’"
             let tab = surfaceTitle.isEmpty ? "" : "‘\(surfaceTitle)’"
             let main: String
             switch (ws.isEmpty, tab.isEmpty) {
-            case (false, false): main = "\(termName) workspace \(ws), tab \(tab)"
-            case (false, true):  main = "\(termName) workspace \(ws)"
-            case (true, false):  main = "\(termName) tab \(tab)"
+            case (false, false): main = "\(termName) workspace \(ws)\(wsKey), tab \(tab)\(tabKey)"
+            case (false, true):  main = "\(termName) workspace \(ws)\(wsKey)"
+            case (true, false):  main = "\(termName) tab \(tab)\(tabKey)"
             case (true, true):   main = termName
             }
             return TerminalRowParts(main: main, shortcut: nil)
@@ -381,7 +395,7 @@ class OverlayPanel {
     /// Row 3: the requested operation — `op item list`, `op read op://X/Y`,
     /// `git fetch origin`, etc. Color-coded by kind.
     private func makeOperationRow(_ entry: ProcessEntry, kind: RequestKind) -> NSView {
-        let text = operationDisplay(argv: entry.triggerArgv, chain: entry.chain)
+        let text = operationDisplay(argv: entry.triggerArgv, chain: entry.chain, cwd: entry.cwd)
         return makeIconRow(
             icon: nil,
             text: text,
