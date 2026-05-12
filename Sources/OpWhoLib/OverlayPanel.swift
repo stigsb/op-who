@@ -439,10 +439,17 @@ class OverlayPanel {
         case .shell:  color = .labelColor;   weight = .medium
         case .other:  color = .labelColor;   weight = .medium
         }
+        // Append the requesting process's cwd in a subdued color. Skips "/"
+        // (which means we never found a meaningful directory in the chain).
+        let cwdSuffix: String? = {
+            guard let c = entry.cwd, c != "/", !c.isEmpty else { return nil }
+            return c
+        }()
         return makeIconRow(
             icon: appIcon(bundleID: info.bundleID),
             text: info.text,
-            size: 12, weight: weight, color: color
+            size: 12, weight: weight, color: color,
+            dimSuffix: cwdSuffix
         )
     }
 
@@ -459,14 +466,18 @@ class OverlayPanel {
     }
 
     /// Build a horizontal row: small icon (or 16pt spacer) on the left,
-    /// a single-line label on the right.
+    /// a single-line label on the right. When `dimSuffix` is non-empty the
+    /// label is rendered as an attributed string with the suffix tinted in
+    /// `secondaryLabelColor` — used to append context like the requesting
+    /// process's cwd after the driver name.
     private func makeIconRow(
         icon: NSImage?,
         text: String,
         size: CGFloat,
         weight: NSFont.Weight,
         color: NSColor,
-        mono: Bool = false
+        mono: Bool = false,
+        dimSuffix: String? = nil
     ) -> NSStackView {
         let row = NSStackView()
         row.orientation = .horizontal
@@ -491,6 +502,20 @@ class OverlayPanel {
         }
 
         let label = makeLabel(text, size: size, weight: weight, color: color, mono: mono)
+        if let suffix = dimSuffix, !suffix.isEmpty {
+            let font = mono
+                ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+                : NSFont.systemFont(ofSize: size, weight: weight)
+            let attr = NSMutableAttributedString(
+                string: text,
+                attributes: [.font: font, .foregroundColor: color]
+            )
+            attr.append(NSAttributedString(
+                string: " \(suffix)",
+                attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
+            ))
+            label.attributedStringValue = attr
+        }
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
