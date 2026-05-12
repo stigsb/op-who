@@ -23,6 +23,34 @@ scripts/bundle.sh              # assemble .app bundle (debug)
 open .build/op-who.app
 ```
 
+Always launch the assembled bundle (`.build/op-who.app`), not the raw binary at `.build/debug/op-who` or `swift run op-who`. `scripts/bundle.sh` re-signs the bundle so the signature carries the stable `CFBundleIdentifier` (`com.stigbakken.op-who`) instead of the per-build hash (`op-who-<sha1>`) `swift build` assigns. Without that step, TCC treats each rebuild as a fresh app and re-prompts every time.
+
+### Keeping the Accessibility grant across rebuilds
+
+On macOS Sonoma and later, TCC pins ad-hoc-signed apps by *cdhash* as well as identifier. Every clean rebuild changes the cdhash, so the grant is silently invalidated even though the System Settings entry still shows "Granted" — `op-who` then reports "Accessibility: Not Granted" and the only fix is `tccutil reset` plus a re-grant.
+
+A one-time self-signed code-signing certificate makes the cert leaf the stable anchor and the grant survives every rebuild. Setup:
+
+1. Open **Keychain Access**.
+2. **Keychain Access → Certificate Assistant → Create a Certificate…**
+3. Name: **`op-who Local Dev`** (this exact name is what `scripts/bundle.sh` looks for; override with `OP_WHO_SIGN_IDENTITY=...` if you prefer a different name).
+4. Identity Type: **Self Signed Root**.
+5. Certificate Type: **Code Signing**.
+6. Click **Create**, then **Done**. The cert lands in your *login* keychain and is automatically trusted for code signing for your user.
+
+From the next `scripts/bundle.sh` run onward, the bundle is signed with that cert. Verify with `codesign -dvv .build/op-who.app` — output should include `Authority=op-who Local Dev` and no longer say `Signature=adhoc`. Then **launch op-who once and grant Accessibility one final time**; subsequent rebuilds will keep the grant.
+
+If the cert is missing, `scripts/bundle.sh` falls back to ad-hoc signing and prints a warning. The bundle still works; you just have to re-grant after every clean rebuild.
+
+#### If Accessibility still breaks after rebuild
+
+Some macOS versions require the self-signed cert to be a *trusted* root for code signing:
+
+1. In **Keychain Access**, find the `op-who Local Dev` certificate (login keychain → My Certificates).
+2. Double-click it → expand **Trust** → set **Code Signing** to **Always Trust**.
+3. Close the window (you'll be asked for your login password to write the change).
+4. `tccutil reset Accessibility com.stigbakken.op-who`, rebuild, relaunch, re-grant once.
+
 ## Testing
 
 ```bash
