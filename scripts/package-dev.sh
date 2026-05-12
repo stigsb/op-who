@@ -48,8 +48,16 @@ security find-certificate -c "$SIGN_IDENTITY" -p > "$DIST_DIR/${PRODUCT}-dev-cer
 # to the value currently in Info.plist so the script's standalone-download
 # mode targets the matching release. The same patched copy goes into both
 # the tarball and (later) dist/install.sh.
+#
+# The pattern is anchored to the full assignment line so the unpatched-copy
+# sentinel (a second `__VERSION__` literal inside the equality check) stays
+# put. Patching both would make the check tautological.
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Sources/OpWhoLib/Info.plist)
-sed "s/__VERSION__/v${VERSION}/" scripts/install.sh > "$DIST_DIR/install.sh"
+sed "s/^VERSION=\"__VERSION__\"\$/VERSION=\"v${VERSION}\"/" scripts/install.sh > "$DIST_DIR/install.sh"
+if ! grep -q "^VERSION=\"v${VERSION}\"\$" "$DIST_DIR/install.sh"; then
+    echo "error: failed to patch VERSION in install.sh" >&2
+    exit 1
+fi
 chmod +x "$DIST_DIR/install.sh"
 
 # Include a short README so recipients aren't guessing.
