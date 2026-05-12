@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-12
+
+- Changed: `install.sh` is now a release-pinned dual-mode installer — runs standalone (downloads + verifies the tarball via signed checksums) or from inside an unpacked tarball.
+- Changed: README now leads with early-access install; build/release details moved to `CONTRIBUTORS.md`.
+
 ## [0.5.0] - 2026-05-12
 
 - Added: macOS menu-bar utility that identifies which process triggered a 1Password approval dialog (CLI or SSH agent), driven by the Accessibility API and shown as an overlay near the 1Password window.
