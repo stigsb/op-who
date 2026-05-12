@@ -163,13 +163,14 @@ public class OnePasswordWatcher {
     }
 
     fileprivate func handleWindowEvent(element: AXUIElement) {
+        let handleStart = DispatchTime.now()
         guard isApprovalDialog(element) else { return }
 
         // Find trigger processes: `op` (CLI) and SSH client processes.
         // Uses a single process scan to avoid duplicate work.  Signature
         // verification of `op` binaries is deferred to chain-building time
         // so it doesn't block the initial detection.
-        let triggerProcs = ProcessTree.findTriggerProcesses()
+        let triggerProcs = measure("findTriggerProcesses") { ProcessTree.findTriggerProcesses() }
         Log.watcher.info("Found \(triggerProcs.count, privacy: .public) trigger process(es)")
         guard !triggerProcs.isEmpty else {
             Log.watcher.info("No trigger processes found, skipping overlay")
@@ -180,7 +181,7 @@ public class OnePasswordWatcher {
 
         var candidates: [TriggerCandidate] = []
         for proc in triggerProcs {
-            let result = ProcessTree.buildChain(from: proc.pid)
+            let result = measure("buildChain[\(proc.pid)]") { ProcessTree.buildChain(from: proc.pid) }
             // Skip processes with no meaningful context (e.g. 1Password's own
             // internal `op` helper which has no parent chain and no TTY).
             if result.chain.count <= 1 && result.tty == nil { continue }
@@ -194,25 +195,28 @@ public class OnePasswordWatcher {
             // `git` triggers that aren't network-capable (`git show`, `git log`,
             // etc.) can never have prompted a 1Password SSH approval, so they
             // are noise — drop them before they hit the overlay.
-            let triggerArgv = ProcessTree.processArgv(pid: triggerPID)
+            let triggerArgv = measure("processArgv[\(triggerPID)]") { ProcessTree.processArgv(pid: triggerPID) }
             if triggerNode.name == "git", !isRemoteGitSubcommand(argv: triggerArgv) {
                 continue
             }
 
-            let tabTitle = result.tty.flatMap { tty in
-                TerminalHelper.tabTitle(
-                    forTTY: tty,
-                    terminalBundleID: result.terminalBundleID,
-                    terminalPID: result.terminalPID
-                )
-            }
+            let tabInfo: TerminalHelper.TabInfo = result.tty.map { tty in
+                measure("tabInfo[\(tty)]") {
+                    TerminalHelper.tabInfo(
+                        forTTY: tty,
+                        terminalBundleID: result.terminalBundleID,
+                        terminalPID: result.terminalPID
+                    )
+                }
+            } ?? .empty
+            let tabTitle = tabInfo.name
 
             let claudeSession: String?
             let claudeCtx: ClaudeContext?
             if let claudePID = result.claudePID {
-                claudeSession = ProcessTree.claudeSessionInfo(pid: claudePID)
-                if let claudeCWD = ProcessTree.processCWD(pid: claudePID) {
-                    claudeCtx = claudeContext(forCWD: claudeCWD)
+                claudeSession = measure("claudeSessionInfo") { ProcessTree.claudeSessionInfo(pid: claudePID) }
+                if let claudeCWD = measure("claudeCWD", { ProcessTree.processCWD(pid: claudePID) }) {
+                    claudeCtx = measure("claudeContext") { claudeContext(forCWD: claudeCWD) }
                 } else {
                     claudeCtx = nil
                 }
@@ -223,7 +227,7 @@ public class OnePasswordWatcher {
 
             // Get CWD from the chain — the trigger process (op, ssh) often
             // has CWD of "/", so walk up to find the shell's CWD instead.
-            let cwd = ProcessTree.bestCWD(chain: foldedChain)
+            let cwd = measure("bestCWD") { ProcessTree.bestCWD(chain: foldedChain) }
                 .map(ProcessTree.tidyPath)
 
             // For cmux, pull the workspace / tab identifiers from the trigger's
@@ -233,18 +237,23 @@ public class OnePasswordWatcher {
             var cmuxTabID: String? = nil
             var cmuxSurface: CmuxSurfaceInfo? = nil
             if isCmuxBundleID(result.terminalBundleID) {
-                let env = ProcessTree.processEnvironment(
-                    pid: triggerPID,
-                    names: ["CMUX_WORKSPACE_ID", "CMUX_TAB_ID"]
-                )
+                let env = measure("processEnvironment[\(triggerPID)]") {
+                    ProcessTree.processEnvironment(
+                        pid: triggerPID,
+                        names: ["CMUX_WORKSPACE_ID", "CMUX_TAB_ID"]
+                    )
+                }
                 cmuxWorkspaceID = env["CMUX_WORKSPACE_ID"]
                 cmuxTabID = env["CMUX_TAB_ID"]
+                Log.cmux.info("trigger pid=\(triggerPID, privacy: .public) tty=\(result.tty ?? "<nil>", privacy: .public) CMUX_WORKSPACE_ID=\(cmuxWorkspaceID ?? "<unset>", privacy: .public) CMUX_TAB_ID=\(cmuxTabID ?? "<unset>", privacy: .public)")
                 if let tty = result.tty {
-                    cmuxSurface = CmuxHelper.surfaceInfo(forTTY: tty)
+                    cmuxSurface = measure("cmuxSurfaceInfo[\(tty)]") { CmuxHelper.surfaceInfo(forTTY: tty) }
+                } else {
+                    Log.cmux.info("trigger has no TTY — skipping cmux surface lookup")
                 }
             }
 
-            let entryStartTime = ProcessTree.processStartTime(pid: triggerPID)
+            let entryStartTime = measure("processStartTime") { ProcessTree.processStartTime(pid: triggerPID) }
 
             let entry = OverlayPanel.ProcessEntry(
                 pid: triggerPID,
@@ -252,6 +261,7 @@ public class OnePasswordWatcher {
                 triggerArgv: triggerArgv,
                 tty: result.tty,
                 tabTitle: tabTitle,
+                tabShortcut: tabInfo.shortcut,
                 claudeSession: claudeSession,
                 claudeContext: claudeCtx,
                 terminalBundleID: result.terminalBundleID,
@@ -279,10 +289,12 @@ public class OnePasswordWatcher {
             ))
         }
 
-        guard let chosen = selectBestCandidate(candidates) else {
+        guard let chosen = measure("selectBestCandidate", { selectBestCandidate(candidates) }) else {
             Log.watcher.info("No surviving trigger candidates after filter+fold")
             return
         }
+        let totalMs = Double(DispatchTime.now().uptimeNanoseconds - handleStart.uptimeNanoseconds) / 1_000_000.0
+        Log.timing.info("handleWindowEvent total \(String(format: "%.1fms", totalMs), privacy: .public) (candidates=\(candidates.count, privacy: .public))")
 
         // Suppress redundant re-shows. 1Password's Electron-rendered dialog
         // fires multiple AXWindowCreated / AXFocusedWindowChanged events for

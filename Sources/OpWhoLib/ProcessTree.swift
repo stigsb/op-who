@@ -474,6 +474,37 @@ public enum ProcessTree {
     }
 
     public static func allProcesses() -> [ProcessNode] {
+        // Honor a short-lived cache so multiple chain builds in the same
+        // dialog-handler invocation share one sysctl scan. Scanning every
+        // process is the single largest cost in handleWindowEvent (~200ms on
+        // a busy machine), and the per-handler call sequence does it 4×
+        // (one in findTriggerProcesses + one per buildChain).
+        cacheLock.lock()
+        if let cached = cacheValue,
+           DispatchTime.now().uptimeNanoseconds - cacheStamp.uptimeNanoseconds < cacheTTL {
+            defer { cacheLock.unlock() }
+            return cached
+        }
+        cacheLock.unlock()
+
+        let fresh = scanAllProcesses()
+
+        cacheLock.lock()
+        cacheValue = fresh
+        cacheStamp = DispatchTime.now()
+        cacheLock.unlock()
+        return fresh
+    }
+
+    private static var cacheValue: [ProcessNode]?
+    private static var cacheStamp: DispatchTime = .now()
+    private static let cacheLock = NSLock()
+    /// 250 ms is enough to dedupe within one handleWindowEvent burst
+    /// (find + 3×buildChain runs in ~30 ms after deduplication) without
+    /// risking stale data across dialog events seconds apart.
+    private static let cacheTTL: UInt64 = 250 * 1_000_000
+
+    private static func scanAllProcesses() -> [ProcessNode] {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size: Int = 0
 

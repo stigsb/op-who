@@ -2,63 +2,169 @@ import Foundation
 
 /// Information about a cmux surface (tab), looked up by TTY.
 public struct CmuxSurfaceInfo: Equatable {
-    public let workspaceRef: String     // e.g. "workspace:15"
-    public let workspaceTitle: String   // e.g. "sunstone-cms" or a path
-    public let surfaceRef: String       // e.g. "surface:35"
-    public let surfaceTitle: String     // tab title (user-renameable)
-    public let tty: String              // e.g. "ttys033" (no /dev/ prefix)
+    public let workspaceRef: String              // e.g. "workspace:15"
+    public let workspaceTitle: String            // raw cmux title (may be generic, e.g. "Item-0")
+    public let workspaceDescription: String?     // optional longer description from cmux
+    public let surfaceRef: String                // e.g. "surface:35"
+    public let surfaceTitle: String              // raw cmux surface title
+    public let surfaceType: String               // "terminal", "browser", etc.
+    public let tty: String                       // bare ttysNN (no /dev/ prefix)
+
+    public init(
+        workspaceRef: String,
+        workspaceTitle: String,
+        workspaceDescription: String? = nil,
+        surfaceRef: String,
+        surfaceTitle: String,
+        surfaceType: String = "terminal",
+        tty: String
+    ) {
+        self.workspaceRef = workspaceRef
+        self.workspaceTitle = workspaceTitle
+        self.workspaceDescription = workspaceDescription
+        self.surfaceRef = surfaceRef
+        self.surfaceTitle = surfaceTitle
+        self.surfaceType = surfaceType
+        self.tty = tty
+    }
+
+    /// Workspace title best-suited for display. If cmux only has a generic
+    /// placeholder (`Item-0`, `Workspace 1`, …) and no description, returns
+    /// "" so callers can omit the field entirely.
+    public var displayWorkspaceTitle: String {
+        if !CmuxHelper.looksGenericTitle(workspaceTitle) { return workspaceTitle }
+        if let d = workspaceDescription, !d.isEmpty { return d }
+        return ""
+    }
 }
 
 public enum CmuxHelper {
 
-    /// Look up workspace + surface info for a TTY by running `cmux tree --all`
-    /// and parsing the textual hierarchy. Returns nil if cmux is unavailable
-    /// or no surface matches the TTY. Cached for a few seconds.
+    /// Look up workspace + surface info for a TTY by reading cmux's session
+    /// state file. Returns nil if the file is unreadable or no terminal panel
+    /// matches the TTY. Cached briefly so multiple lookups in one dialog
+    /// reuse a single file read.
     public static func surfaceInfo(forTTY tty: String) -> CmuxSurfaceInfo? {
         let bare = tty.hasPrefix("/dev/") ? String(tty.dropFirst("/dev/".count)) : tty
-        return cachedMap()?[bare]
+        let map = cachedMap()
+        let hit = map?[bare]
+        if hit == nil {
+            let keys = map?.keys.sorted().joined(separator: ",") ?? "<nil-map>"
+            Log.cmux.info("surfaceInfo MISS tty=\(bare, privacy: .public) map_size=\(map?.count ?? -1, privacy: .public) keys=\(keys, privacy: .public)")
+        } else {
+            Log.cmux.info("surfaceInfo HIT  tty=\(bare, privacy: .public) ws=\(hit!.workspaceTitle, privacy: .public) surface=\(hit!.surfaceTitle, privacy: .public)")
+        }
+        return hit
     }
 
-    /// Pure parser: take the textual output of `cmux tree --all` and return
-    /// a map from bare tty name → CmuxSurfaceInfo.
-    public static func parseTree(_ output: String) -> [String: CmuxSurfaceInfo] {
-        var currentWorkspaceRef = ""
-        var currentWorkspaceTitle = ""
+    /// Parse the raw bytes of cmux's session JSON file
+    /// (`~/Library/Application Support/cmux/session-com.cmuxterm.app.json`).
+    /// Returns a map from bare tty name → CmuxSurfaceInfo for every
+    /// terminal-typed panel that carries a ttyName.
+    ///
+    /// We read this file directly instead of calling `cmux --json tree --all`
+    /// because cmux's CLI talks to its GUI daemon over a Unix socket that
+    /// keys auth on the connecting process's LaunchServices responsibility
+    /// chain. op-who is a separate `.app`, so the daemon rejects the
+    /// handshake with "Failed to write to socket (Broken pipe)" no matter
+    /// how we wrap the spawn (shell, launchctl, osascript). The session
+    /// file, by contrast, is a plain JSON written by cmux on every state
+    /// change and readable by any same-user process.
+    public static func parseSessionFile(_ data: Data) -> [String: CmuxSurfaceInfo] {
+        guard let session = try? JSONDecoder().decode(SessionJSON.self, from: data) else {
+            return [:]
+        }
         var map: [String: CmuxSurfaceInfo] = [:]
-
-        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
-            if let ws = matchWorkspaceLine(s) {
-                currentWorkspaceRef = ws.ref
-                currentWorkspaceTitle = ws.title
-                continue
-            }
-            if let sf = matchSurfaceLine(s) {
-                map[sf.tty] = CmuxSurfaceInfo(
-                    workspaceRef: currentWorkspaceRef,
-                    workspaceTitle: currentWorkspaceTitle,
-                    surfaceRef: sf.ref,
-                    surfaceTitle: sf.title,
-                    tty: sf.tty
-                )
+        for (wi, window) in session.windows.enumerated() {
+            for (wsi, ws) in window.tabManager.workspaces.enumerated() {
+                // Workspace title preference: customTitle (user-set) wins.
+                // processTitle is auto-derived; we keep it as a description
+                // fallback so a generic title can still surface something
+                // useful (e.g. "Terminal 1" → description = "Terminal 1").
+                let wsTitle = nonEmpty(ws.customTitle)
+                    ?? nonEmpty(ws.processTitle)
+                    ?? nonEmpty(ws.currentDirectory)
+                    ?? ""
+                let wsDesc: String? = {
+                    if let custom = nonEmpty(ws.customTitle),
+                       let proc = nonEmpty(ws.processTitle),
+                       custom != proc {
+                        return proc
+                    }
+                    return nil
+                }()
+                let wsRef = "workspace:\(wi):\(wsi)"
+                for panel in ws.panels {
+                    guard panel.type == "terminal",
+                          let tty = nonEmpty(panel.ttyName) else { continue }
+                    let bare = tty.hasPrefix("/dev/") ? String(tty.dropFirst("/dev/".count)) : tty
+                    map[bare] = CmuxSurfaceInfo(
+                        workspaceRef: wsRef,
+                        workspaceTitle: wsTitle,
+                        workspaceDescription: wsDesc,
+                        surfaceRef: "surface:\(panel.id)",
+                        surfaceTitle: panel.title ?? "",
+                        surfaceType: panel.type,
+                        tty: bare
+                    )
+                }
             }
         }
         return map
     }
 
-    // MARK: - Private
+    /// Convenience for tests: parse a JSON string.
+    public static func parseSessionFile(_ json: String) -> [String: CmuxSurfaceInfo] {
+        parseSessionFile(Data(json.utf8))
+    }
+
+    /// True when the title is empty or one of cmux's auto-generated
+    /// placeholders (e.g. `Item-0`, `Item 1`, `Workspace-2`, `Workspace 3`,
+    /// `Terminal 1`). Match is case-insensitive and anchored to the whole
+    /// string.
+    public static func looksGenericTitle(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return true }
+        return trimmed.range(
+            of: #"^(Item|Workspace|Terminal)[\s-]\d+$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    // MARK: - JSON schema (subset of cmux's session state file)
+
+    struct SessionJSON: Decodable {
+        let windows: [Window]
+
+        struct Window: Decodable {
+            let tabManager: TabManager
+        }
+
+        struct TabManager: Decodable {
+            let workspaces: [Workspace]
+        }
+
+        struct Workspace: Decodable {
+            let customTitle: String?
+            let processTitle: String?
+            let currentDirectory: String?
+            let panels: [Panel]
+        }
+
+        struct Panel: Decodable {
+            let id: String
+            let title: String?
+            let ttyName: String?
+            let type: String
+        }
+    }
+
+    // MARK: - File caching
 
     private static var cacheValue: [String: CmuxSurfaceInfo]?
     private static var cacheTime: Date = .distantPast
-    private static let cacheTTL: TimeInterval = 3.0
+    private static let cacheTTL: TimeInterval = 1.0
     private static let cacheLock = NSLock()
-    private static let subprocessQueue = DispatchQueue(
-        label: "com.stigbakken.op-who.cmuxhelper", qos: .userInitiated
-    )
-    /// Timeout for the cmux subprocess. The wait happens via a semaphore on
-    /// the calling thread (does NOT spin the runloop), so a short bound here
-    /// is the safety net for a hung `cmux` binary, not the common case.
-    private static let subprocessTimeout: TimeInterval = 1.0
 
     private static func cachedMap() -> [String: CmuxSurfaceInfo]? {
         cacheLock.lock()
@@ -68,25 +174,11 @@ public enum CmuxHelper {
         }
         cacheLock.unlock()
 
-        // Run the subprocess on a background queue and block here via
-        // DispatchSemaphore. NSTask.waitUntilExit() on the main thread spins
-        // the runloop, which can re-dispatch AX callbacks while we hold the
-        // cache lock — those callbacks re-enter cachedMap() and deadlock on
-        // the lock. Semaphore.wait() blocks the thread without spinning the
-        // runloop, so no re-entrant AX callbacks fire and no deadlock.
-        var freshResult: [String: CmuxSurfaceInfo]?
-        let sem = DispatchSemaphore(value: 0)
-        subprocessQueue.async {
-            if let output = runCmuxTree() {
-                freshResult = parseTree(output)
-            }
-            sem.signal()
-        }
-        _ = sem.wait(timeout: .now() + subprocessTimeout)
+        let fresh = readSessionFile().map(parseSessionFile)
 
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let fresh = freshResult {
+        if let fresh = fresh {
             cacheValue = fresh
             cacheTime = Date()
             return fresh
@@ -94,84 +186,26 @@ public enum CmuxHelper {
         return cacheValue
     }
 
-    private static func runCmuxTree() -> String? {
-        guard let bin = cmuxBinary() else { return nil }
-        let task = Process()
-        task.launchPath = bin
-        task.arguments = ["tree", "--all"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = Pipe()
+    private static func readSessionFile() -> Data? {
+        let path = sessionFilePath()
         do {
-            try task.run()
-            task.waitUntilExit()
-            guard task.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            Log.cmux.info("readSessionFile: \(data.count, privacy: .public) bytes")
+            return data
         } catch {
+            Log.cmux.error("readSessionFile failed: \(error.localizedDescription, privacy: .public) path=\(path, privacy: .public)")
             return nil
         }
     }
 
-    private static func cmuxBinary() -> String? {
-        // Note: /Applications/cmux.app/Contents/MacOS/cmux is the GUI launcher,
-        // not the CLI. The CLI lives at .../Contents/Resources/bin/cmux. The
-        // user's $PATH usually has a symlink to that, so we check both.
-        let candidates = [
-            "/Applications/cmux.app/Contents/Resources/bin/cmux",
-            "/opt/homebrew/bin/cmux",
-            "/usr/local/bin/cmux",
-        ]
-        let fm = FileManager.default
-        for c in candidates where fm.isExecutableFile(atPath: c) {
-            return c
-        }
-        return nil
+    private static func sessionFilePath() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/cmux/session-com.cmuxterm.app.json"
     }
 
-    // MARK: - Parsing primitives (exposed internally for tests)
-
-    /// `… workspace workspace:NN "title" [selected]?` → (ref, title)
-    static func matchWorkspaceLine(_ s: String) -> (ref: String, title: String)? {
-        // Find " workspace workspace:" anchor to avoid matching the noun in
-        // "list-workspaces" etc.
-        guard let wsRange = s.range(of: "workspace workspace:") else { return nil }
-        let after = s[wsRange.upperBound...]
-        // Read digits.
-        let digits = after.prefix(while: { $0.isNumber })
-        guard !digits.isEmpty else { return nil }
-        let ref = "workspace:\(digits)"
-        // Then find a quoted title.
-        guard let title = firstQuoted(in: String(after.dropFirst(digits.count))) else {
-            return (ref, "")
-        }
-        return (ref, title)
-    }
-
-    /// `surface surface:NN [terminal] "title" […]? tty=ttysNN` → (ref, title, tty)
-    static func matchSurfaceLine(_ s: String) -> (ref: String, title: String, tty: String)? {
-        guard let sfRange = s.range(of: "surface surface:") else { return nil }
-        let after = s[sfRange.upperBound...]
-        let digits = after.prefix(while: { $0.isNumber })
-        guard !digits.isEmpty else { return nil }
-        let ref = "surface:\(digits)"
-        let rest = String(after.dropFirst(digits.count))
-        let title = firstQuoted(in: rest) ?? ""
-        // The tty marker comes near the end of the line.
-        guard let ttyRange = s.range(of: "tty=") else { return nil }
-        let ttyTail = s[ttyRange.upperBound...]
-        let tty = String(ttyTail.prefix(while: { $0.isLetter || $0.isNumber }))
-        guard !tty.isEmpty else { return nil }
-        return (ref, title, tty)
-    }
-
-    /// Return the contents of the first `"..."` substring, or nil.
-    /// Handles escaped quotes minimally (cmux titles don't embed quotes
-    /// in practice; we keep this simple).
-    private static func firstQuoted(in s: String) -> String? {
-        guard let open = s.firstIndex(of: "\"") else { return nil }
-        let afterOpen = s.index(after: open)
-        guard let close = s[afterOpen...].firstIndex(of: "\"") else { return nil }
-        return String(s[afterOpen..<close])
+    private static func nonEmpty(_ s: String?) -> String? {
+        guard let s = s else { return nil }
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

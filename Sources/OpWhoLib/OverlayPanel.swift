@@ -8,6 +8,10 @@ class OverlayPanel {
         let triggerArgv: [String]
         let tty: String?
         let tabTitle: String?
+        /// Optional keyboard-shortcut hint for jumping to the source tab
+        /// (e.g. "⌘1", "⌘9", "window 2 ⌘3"). Set for iTerm, nil for other
+        /// terminals where the concept doesn't apply.
+        let tabShortcut: String?
         let claudeSession: String?
         let claudeContext: ClaudeContext?
         let terminalBundleID: String?
@@ -234,7 +238,7 @@ class OverlayPanel {
     private func makeTerminalRow(_ entry: ProcessEntry) -> NSView {
         let bundleID = entry.terminalBundleID
         let termName = humanTerminalName(bundleID: bundleID) ?? "Unknown terminal"
-        let text = terminalRowText(entry: entry, termName: termName)
+        let parts = Self.terminalRowParts(entry: entry, termName: termName)
 
         let row = NSStackView()
         row.orientation = .horizontal
@@ -260,7 +264,25 @@ class OverlayPanel {
         }
 
         // Main text label — should hug content so the elapsed label gets pushed right.
-        let label = makeLabel(text, size: 13, weight: .semibold, color: .labelColor)
+        // When a keyboard shortcut hint is present (e.g. iTerm's ⌘N), render
+        // it in a dimmer color in the same label so it visually reads as a
+        // hint rather than part of the tab name.
+        let label = makeLabel("", size: 13, weight: .semibold, color: .labelColor)
+        let mainFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let attr = NSMutableAttributedString(
+            string: parts.main,
+            attributes: [.font: mainFont, .foregroundColor: NSColor.labelColor]
+        )
+        if let shortcut = parts.shortcut {
+            attr.append(NSAttributedString(
+                string: " \(shortcut)",
+                attributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: NSColor.systemBlue,
+                ]
+            ))
+        }
+        label.attributedStringValue = attr
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -284,23 +306,54 @@ class OverlayPanel {
         return row
     }
 
-    /// Build the text for row 1. Pulled out so it's testable.
-    private func terminalRowText(entry: ProcessEntry, termName: String) -> String {
+    /// Two-part decomposition of row 1: the human-readable main text and an
+    /// optional keyboard-shortcut hint to render in a subdued color.
+    struct TerminalRowParts: Equatable {
+        let main: String
+        let shortcut: String?
+    }
+
+    /// Build the parts of row 1. The shortcut is split out so the UI can
+    /// render it in a different color from the rest of the row.
+    static func terminalRowParts(entry: ProcessEntry, termName: String) -> TerminalRowParts {
         if let s = entry.cmuxSurface {
-            let ws = s.workspaceTitle.isEmpty ? "" : "‘\(s.workspaceTitle)’"
-            let tab = s.surfaceTitle.isEmpty ? "" : "‘\(s.surfaceTitle)’"
+            let wsTitle = s.displayWorkspaceTitle
+            let surfaceTitle = CmuxHelper.looksGenericTitle(s.surfaceTitle) ? "" : s.surfaceTitle
+            let ws = wsTitle.isEmpty ? "" : "‘\(wsTitle)’"
+            let tab = surfaceTitle.isEmpty ? "" : "‘\(surfaceTitle)’"
+            let main: String
             switch (ws.isEmpty, tab.isEmpty) {
-            case (false, false): return "\(termName) workspace \(ws), tab \(tab)"
-            case (false, true):  return "\(termName) workspace \(ws)"
-            case (true, false):  return "\(termName) tab \(tab)"
-            case (true, true):   return termName
+            case (false, false): main = "\(termName) workspace \(ws), tab \(tab)"
+            case (false, true):  main = "\(termName) workspace \(ws)"
+            case (true, false):  main = "\(termName) tab \(tab)"
+            case (true, true):   main = termName
             }
+            return TerminalRowParts(main: main, shortcut: nil)
         }
-        if let title = entry.tabTitle, !title.isEmpty {
-            let label = isCmuxBundleID(entry.terminalBundleID) ? "workspace" : "tab"
-            return "\(termName) \(label) ‘\(title)’"
+        // For cmux without surface info, AX window title is unreliable
+        // (returns "Item-0" placeholders rather than the visible workspace
+        // name). Show only the terminal name.
+        if isCmuxBundleID(entry.terminalBundleID) {
+            return TerminalRowParts(main: termName, shortcut: nil)
         }
-        return termName
+        let title = entry.tabTitle?.trimmingCharacters(in: .whitespaces) ?? ""
+        let shortcut = entry.tabShortcut?.trimmingCharacters(in: .whitespaces)
+        let shortcutOrNil = (shortcut?.isEmpty ?? true) ? nil : shortcut
+        let main: String
+        if !title.isEmpty {
+            main = "\(termName) tab ‘\(title)’"
+        } else {
+            main = termName
+        }
+        return TerminalRowParts(main: main, shortcut: shortcutOrNil)
+    }
+
+    /// Flat-string composition of row 1. Kept for callers (tests, logging)
+    /// that don't need the styled rendering — the UI uses `terminalRowParts`.
+    static func terminalRowText(entry: ProcessEntry, termName: String) -> String {
+        let p = terminalRowParts(entry: entry, termName: termName)
+        if let s = p.shortcut { return "\(p.main) \(s)" }
+        return p.main
     }
 
     /// Row 2: the user-recognizable process driving the trigger.

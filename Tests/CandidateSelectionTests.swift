@@ -13,7 +13,8 @@ private func n(_ name: String, pid: pid_t, ppid: pid_t = 1, verified: Bool = fal
 private func entry(pid: pid_t, chain: [ProcessNode]) -> OverlayPanel.ProcessEntry {
     OverlayPanel.ProcessEntry(
         pid: pid, chain: chain, triggerArgv: [],
-        tty: nil, tabTitle: nil, claudeSession: nil, claudeContext: nil,
+        tty: nil, tabTitle: nil, tabShortcut: nil,
+        claudeSession: nil, claudeContext: nil,
         terminalBundleID: nil, terminalPID: nil, cwd: nil,
         cmuxWorkspaceID: nil, cmuxTabID: nil, cmuxSurface: nil,
         startTime: nil
