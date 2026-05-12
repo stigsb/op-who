@@ -59,7 +59,11 @@ scripts/release-version.sh --set X.Y.Z <<'CHANGELOG'
 CHANGELOG
 ```
 
-The script bumps/sets `CFBundleShortVersionString` and `CFBundleVersion` in `Sources/OpWhoLib/Info.plist`, prepends the entry to `CHANGELOG.md`, makes a `release: vX.Y.Z` commit, and creates an annotated tag.
+The script bumps/sets `CFBundleShortVersionString` and `CFBundleVersion` in `Sources/OpWhoLib/Info.plist`, prepends the entry to `CHANGELOG.md`, makes a `release: vX.Y.Z` commit, and creates a **signed** tag (`git tag -s`).
+
+Prerequisite: `user.signingkey` and (for SSH signing) `gpg.format=ssh` must be configured in git. If `git tag -s` fails because no signing key is set, fix the git config and re-run — release tags must be signed.
+
+If the tag creation fails after the commit is made, the script will have left the release commit in place. Verify with `git log -1`; you can either re-run after fixing the signing config (and delete the orphaned commit first) or manually create the tag with `git tag -s vX.Y.Z -m "Release vX.Y.Z"`.
 
 ## Step 5: Push and finish on GitHub
 

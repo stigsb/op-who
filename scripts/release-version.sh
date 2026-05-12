@@ -154,6 +154,10 @@ fi
 TAG="v${NEW_VERSION}"
 git add "$PLIST" "$CHANGELOG"
 git commit -m "release: $TAG"
-git tag -a "$TAG" -m "Release $TAG"
+
+# Sign the tag. Uses whatever the user's git is configured for
+# (gpg.format=ssh + user.signingkey for SSH-signed tags, or GPG).
+# Fails fast if no signing key is configured — release tags must be signed.
+git tag -s "$TAG" -m "Release $TAG"
 
 echo "Created commit and tag $TAG"
