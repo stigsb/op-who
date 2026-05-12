@@ -15,8 +15,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.title = "op?"
-            button.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+            button.image = Self.menuBarIcon()
+            button.imagePosition = .imageOnly
+            button.title = ""
         }
 
         let menu = NSMenu()
@@ -101,6 +102,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateStartupMenuItemState() {
         startupMenuItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+    }
+
+    /// Draw the menu-bar template icon: a filled disk with the inner ring
+    /// and the "?" glyph punched out as transparent cutouts. Mirrors the
+    /// 1Password app icon's silhouette (so the visual relationship reads at
+    /// a glance) but with "?" in place of "1". Marked `isTemplate = true`
+    /// so macOS tints for the menu bar's light/dark mode.
+    private static func menuBarIcon() -> NSImage {
+        // Menu bar slot is ~22pt tall; 18pt leaves a hair of breathing room.
+        let size: CGFloat = 18
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            // 1. Fill the disk.
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+
+            guard let gc = NSGraphicsContext.current else { return true }
+            gc.saveGraphicsState()
+            // .destinationOut: subsequent drawing clears alpha wherever it
+            // would have painted, regardless of color. That turns strokes
+            // and glyphs into transparent cutouts in the disk.
+            gc.compositingOperation = .destinationOut
+
+            // 2. Concentric ring cutout, set in slightly from the disk edge.
+            let ringInset = size * 0.09
+            let ringPath = NSBezierPath(ovalIn: rect.insetBy(dx: ringInset, dy: ringInset))
+            ringPath.lineWidth = max(1, size * 0.06)
+            NSColor.black.setStroke()
+            ringPath.stroke()
+
+            // 3. "?" cutout, centered. Heavy weight so the glyph reads at
+            // 18pt; size tuned to fill the ring without crowding it.
+            let font = NSFont.systemFont(ofSize: size * 0.62, weight: .black)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: NSColor.black,
+            ]
+            let glyph = NSAttributedString(string: "?", attributes: attrs)
+            let glyphSize = glyph.size()
+            let glyphOrigin = NSPoint(
+                x: rect.midX - glyphSize.width / 2,
+                y: rect.midY - glyphSize.height / 2
+            )
+            glyph.draw(at: glyphOrigin)
+
+            gc.restoreGraphicsState()
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 
     @objc func toggleRunOnStartup(_ sender: NSMenuItem) {
