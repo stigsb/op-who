@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Added: Signed-checksums trust loop for release artifacts — `scripts/package-dev.sh` now produces `SHA256SUMS` and `SHA256SUMS.sig` alongside the tarball; recipients verify against `https://github.com/stigsb.keys` over TLS. See SIGNING.md.
-- Added: `.github/allowed_signers` for `git verify-tag` developer convenience (wire up once per clone with `git config gpg.ssh.allowedSignersFile .github/allowed_signers`).
-
 ## [0.5.0] - 2026-05-12
 
 - Added: macOS menu-bar utility that identifies which process triggered a 1Password approval dialog (CLI or SSH agent), driven by the Accessibility API and shown as an overlay near the 1Password window.
@@ -21,4 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added: Hardened-runtime release packaging (`scripts/release.sh`) with codesign + notarization plus a notarized-release GitHub Actions workflow (parked until an Apple Developer ID cert is configured).
 - Added: Self-signed dev-build distribution: `scripts/package-dev.sh` produces a tarball with the app, the public cert, and `scripts/install.sh` for one-shot install on another Mac.
 - Added: Draft-release GitHub Actions workflow that opens a draft release on every `v*` tag push for manual artifact upload.
+- Added: Release tags are signed by default (`git tag -s`), using the maintainer's SSH key via whatever `gpg.format` is configured.
+- Added: Signed-checksums trust loop for release artifacts — `scripts/package-dev.sh` produces `SHA256SUMS` and `SHA256SUMS.sig` alongside the tarball; recipients verify against `https://github.com/stigsb.keys` over TLS. See `SIGNING.md`.
+- Added: `.github/allowed_signers` for `git verify-tag` developer convenience (one-time `git config gpg.ssh.allowedSignersFile .github/allowed_signers`).
 - Fixed: Overlay no longer tears down prematurely when short-lived SSH siblings exit while the 1Password approval window is still visible — dismissal now requires both the AX window to be gone and all trigger processes to have exited.
