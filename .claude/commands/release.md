@@ -76,14 +76,17 @@ git push && git push --tags
 Then explain what happens on push:
 
 1. The `release.yml` workflow runs on the tag and opens a **draft** GitHub Release titled `op-who X.Y.Z` with auto-generated notes.
-2. Build the artifact locally and attach it. While there's no Apple Developer ID cert yet, use the dev-build package:
+2. Build the artifact locally and attach it. While there's no Apple Developer ID cert yet, use the dev-build package — it also produces signed checksums (`SHA256SUMS` and `SHA256SUMS.sig`) that anchor end-user trust at `https://github.com/stigsb.keys`. See `SIGNING.md` for the threat model.
 
    ```bash
    scripts/package-dev.sh
-   gh release upload "vX.Y.Z" dist/op-who-dev.tar.gz
+   gh release upload "vX.Y.Z" \
+       dist/op-who-dev.tar.gz \
+       dist/SHA256SUMS \
+       dist/SHA256SUMS.sig
    ```
 
-   Once an Apple Developer ID cert is configured and the relevant secrets are in place, switch over to the notarized workflow (`release-notarized.yml`) and use `scripts/release.sh` instead.
+   Once an Apple Developer ID cert is configured and the relevant secrets are in place, switch over to the notarized workflow (`release-notarized.yml`) and use `scripts/release.sh` instead. The signed-checksums flow should remain in place there too — notarization covers Gatekeeper, not artifact tampering at rest.
 3. Review the release notes in the GitHub UI, edit if needed, then publish:
 
    ```bash

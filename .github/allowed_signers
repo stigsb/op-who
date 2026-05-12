@@ -1,0 +1,12 @@
+# SSH signing keys trusted to sign git tags and commits in this repository.
+#
+# Developer convenience only — enables `git verify-tag` locally:
+#
+#     git config gpg.ssh.allowedSignersFile .github/allowed_signers
+#
+# This file is NOT the trust root for end users who install op-who from a
+# release. Installers should anchor trust at https://github.com/stigsb.keys
+# (TLS-anchored, GitHub-hosted) and ignore any allowed_signers file shipped
+# in or alongside the release artifacts. See SIGNING.md for details.
+
+stig@stigbakken.com namespaces="file,git" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDVKSJmGknuInVDBgPikB2UdV1jVq3SxR6YawT444SkE8vB46IBavKeRl+yw3m6Q42H5z6QeollaWJ/qlN8oufWW1rLGb98K5kqiGJYrFMFRxqK04QSPuQAIhLq4X/KqE5ErQQlMHytPVwa+BC+lkcZX7y+NhuHCJGsSel2BBVItwNycYkX2Wb7c4nTtAYS92zoy3dYzHybJKnI7v5dOWfHpfWLkIWuTJMDCqQCgSv2lhAaQDQ9c8eHbIMQUVhTStxfoPJABAGsPC2JDdzJQ8iqvg0Lz7dp6lQzG9nsUQKWs7vFZdWc3ZdAGnEAwig+T/npU0TJQR8OEg1VvWrTr015

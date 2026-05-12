@@ -81,7 +81,15 @@ EOF
 # Final tarball.
 tar -C dist -czf "$TARBALL" "${PRODUCT}-dev"
 
+# Sign the tarball. Produces dist/SHA256SUMS and dist/SHA256SUMS.sig
+# covering every top-level file in dist/ (the tarball, today). The signed
+# checksum file is the trust anchor end users verify against — see
+# SIGNING.md for the recipient flow.
+scripts/sign-artifacts.sh dist
+
 echo ""
-echo "Packaged: $TARBALL"
-echo "Staged:   $DIST_DIR/"
+echo "Packaged:    $TARBALL"
+echo "Checksums:   dist/SHA256SUMS"
+echo "Signature:   dist/SHA256SUMS.sig"
+echo "Staged dir:  $DIST_DIR/"
 echo "Cert fingerprint (SHA-256): $CERT_FINGERPRINT"

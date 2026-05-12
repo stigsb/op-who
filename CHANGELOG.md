@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added: Signed-checksums trust loop for release artifacts — `scripts/package-dev.sh` now produces `SHA256SUMS` and `SHA256SUMS.sig` alongside the tarball; recipients verify against `https://github.com/stigsb.keys` over TLS. See SIGNING.md.
+- Added: `.github/allowed_signers` for `git verify-tag` developer convenience (wire up once per clone with `git config gpg.ssh.allowedSignersFile .github/allowed_signers`).
+
 ## [0.5.0] - 2026-05-12
 
 - Added: macOS menu-bar utility that identifies which process triggered a 1Password approval dialog (CLI or SSH agent), driven by the Accessibility API and shown as an overlay near the 1Password window.
