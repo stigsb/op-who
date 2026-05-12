@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-12
+
+- Changed: Menu-bar icon is now a "?" in a double-circle, paired visually with the 1Password app icon.
+- Changed: Overlay's terminal row leads with the workspace/tab name (bright) and trails with the terminal app name (dim).
+- Fixed: install.sh in v0.5.1 was unconditionally refusing to run.
+- Changed: Release tarballs are now arch-tagged (`op-who-dev-macos-<arch>.tar.gz`); install.sh ships inside the tarball, not as a separate artifact.
+- Added: GitHub release pages lead with an `## Install` walkthrough above the auto-generated changes list.
+- Added: `scripts/upload-dev.sh` for one-step "upload dist/ and publish" during release.
+
 ## [0.5.1] - 2026-05-12
 
 - Changed: `install.sh` is now a release-pinned dual-mode installer — runs standalone (downloads + verifies the tarball via signed checksums) or from inside an unpacked tarball.
