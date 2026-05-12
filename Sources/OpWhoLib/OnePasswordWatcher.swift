@@ -172,6 +172,9 @@ public class OnePasswordWatcher {
         // so it doesn't block the initial detection.
         let triggerProcs = measure("findTriggerProcesses") { ProcessTree.findTriggerProcesses() }
         Log.watcher.info("Found \(triggerProcs.count, privacy: .public) trigger process(es)")
+        for tp in triggerProcs {
+            Log.watcher.info("trigger candidate pid=\(tp.pid, privacy: .public) name=\(tp.name, privacy: .public) ppid=\(tp.ppid, privacy: .public) tty=\(tp.tty ?? "<none>", privacy: .public)")
+        }
         guard !triggerProcs.isEmpty else {
             Log.watcher.info("No trigger processes found, skipping overlay")
             return
@@ -184,7 +187,11 @@ public class OnePasswordWatcher {
             let result = measure("buildChain[\(proc.pid)]") { ProcessTree.buildChain(from: proc.pid) }
             // Skip processes with no meaningful context (e.g. 1Password's own
             // internal `op` helper which has no parent chain and no TTY).
-            if result.chain.count <= 1 && result.tty == nil { continue }
+            if result.chain.count <= 1 && result.tty == nil {
+                let chainNames = result.chain.map { $0.name }.joined(separator: ",")
+                Log.watcher.info("dropped pid=\(proc.pid, privacy: .public) reason=short-chain-no-tty chain.count=\(result.chain.count, privacy: .public) chain=[\(chainNames, privacy: .public)] termBundle=\(result.terminalBundleID ?? "<none>", privacy: .public)")
+                continue
+            }
 
             // Fold an `op` helper child into its `op` parent, so the trigger
             // we render reflects the user-invoked command, not the helper.
@@ -197,6 +204,7 @@ public class OnePasswordWatcher {
             // are noise — drop them before they hit the overlay.
             let triggerArgv = measure("processArgv[\(triggerPID)]") { ProcessTree.processArgv(pid: triggerPID) }
             if triggerNode.name == "git", !isRemoteGitSubcommand(argv: triggerArgv) {
+                Log.watcher.info("dropped pid=\(triggerPID, privacy: .public) reason=git-non-network argv=\(triggerArgv.joined(separator: " "), privacy: .public)")
                 continue
             }
 

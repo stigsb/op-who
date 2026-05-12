@@ -85,11 +85,22 @@ public enum ProcessTree {
         return allProcesses().filter { sshCommands.contains($0.name) }
     }
 
-    /// Find all trigger processes (op + SSH clients) in a single process scan.
-    /// Does NOT perform signature verification — that is deferred to chain
-    /// building so it doesn't block initial detection.
+    /// Find all trigger processes (op + SSH clients + SSH signers) in a single
+    /// process scan. Does NOT perform signature verification — that is deferred
+    /// to chain building so it doesn't block initial detection.
+    ///
+    /// `op-ssh-sign` is 1Password's bundled commit-signing helper (set as
+    /// `gpg.ssh.program` when users wire 1Password into git's SSH signing).
+    /// `ssh-keygen` is the upstream equivalent used by git when no custom
+    /// program is configured. Without either in this list, commit signing
+    /// would silently fall off op-who's radar — its trigger process never
+    /// reaches a candidate slot, and the surrounding `git commit` is dropped
+    /// as a non-network git subcommand.
     public static func findTriggerProcesses() -> [ProcessNode] {
-        let triggerNames: Set<String> = ["op", "ssh", "git", "scp", "sftp", "rsync"]
+        let triggerNames: Set<String> = [
+            "op", "ssh", "git", "scp", "sftp", "rsync",
+            "ssh-keygen", "op-ssh-sign",
+        ]
         return allProcesses().filter { triggerNames.contains($0.name) }
     }
 

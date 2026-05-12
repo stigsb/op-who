@@ -286,6 +286,11 @@ private func classifyKind(trigger: ProcessNode?) -> RequestKind {
         return trigger.isVerifiedOnePasswordCLI ? .onePasswordCLI : .unverifiedOp
     case "ssh", "scp", "sftp", "rsync":
         return .ssh
+    case "ssh-keygen", "op-ssh-sign":
+        // SSH commit signing: `git commit -S` invokes `ssh-keygen -Y sign`
+        // (or `op-ssh-sign` when 1Password is wired as gpg.ssh.program),
+        // which talks to the SSH agent to sign — same trust model as ssh.
+        return .ssh
     case "git":
         // The only reason `git` would trigger a 1Password approval is its SSH
         // transport — HTTPS auth goes through git-credential helpers, not 1P.
@@ -370,6 +375,9 @@ private func describeAction(kind: RequestKind, trigger: ProcessNode?, argv: [Str
         }
         if cmd == "ssh" {
             return "needs an SSH key"
+        }
+        if cmd == "op-ssh-sign" || cmd == "ssh-keygen" {
+            return "is signing with an SSH key"
         }
         return "needs an SSH key (via ‘\(cmd)’)"
     case .unknown:

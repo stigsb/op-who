@@ -64,6 +64,27 @@ struct RequestSummaryTests {
         #expect(s.title.contains("via") == false)
     }
 
+    @Test func opSshSignFromCommitSigning() {
+        let chain = [node("op-ssh-sign"), node("git"), node("zsh")]
+        let s = makeRequestSummary(
+            chain: chain, tabTitle: nil, claudeSession: nil,
+            terminalBundleID: "com.googlecode.iterm2", cwd: nil
+        )
+        #expect(s.kind == .ssh)
+        #expect(s.title.contains("signing"))
+        #expect(s.isWarning == false)
+    }
+
+    @Test func sshKeygenSigning() {
+        let chain = [node("ssh-keygen"), node("git"), node("bash")]
+        let s = makeRequestSummary(
+            chain: chain, tabTitle: nil, claudeSession: nil,
+            terminalBundleID: nil, cwd: nil
+        )
+        #expect(s.kind == .ssh)
+        #expect(s.title.contains("signing"))
+    }
+
     @Test func actorPrefersClaudeOverShell() {
         let chain = [node("op", verified: true), node("zsh"), node("claude")]
         let s = makeRequestSummary(
