@@ -30,7 +30,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Use the
 - `- Fixed:` — bug fixes
 - `- Removed:` — removed features
 
-Be concise but descriptive. Each entry should be one line. Do NOT include the version header line — `release-version.sh` adds that.
+**Keep it tight.** Each entry is one short line — ideally under ~140 characters. Write for a user skimming the release page, not for an engineer who wants the full story. Rules:
+
+- One line, one sentence. No subclauses piling up rationale, mechanism, edge cases, and follow-ups.
+- Lead with the user-visible change. Skip implementation detail (file paths, internal flags, "now patches X at package time") unless it changes how the user interacts with the thing.
+- If an existing `[Unreleased]` entry is verbose, rewrite it — don't just copy it forward.
+- Details belong in commit messages, `SIGNING.md`, `CONTRIBUTORS.md`, etc. The changelog points at them, it doesn't replace them.
+
+Do NOT include the version header line — `release-version.sh` adds that.
 
 ## Step 3: Confirm with user
 
