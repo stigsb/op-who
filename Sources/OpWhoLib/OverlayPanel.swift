@@ -175,6 +175,11 @@ class OverlayPanel {
             label.lineBreakMode = .byWordWrapping
             label.maximumNumberOfLines = 3
             label.cell?.wraps = true
+            // Cap the prompt's layout width at ~40% of screen width so a long
+            // prompt wraps instead of stretching the overlay. Other rows are
+            // single-line truncate-tail, so the prompt is the only line that
+            // can blow up the panel width.
+            label.preferredMaxLayoutWidth = promptMaxLayoutWidth()
             stack.addArrangedSubview(label)
         }
 
@@ -555,6 +560,15 @@ class OverlayPanel {
         case .ssh:            return .systemBlue
         case .unknown:        return .labelColor
         }
+    }
+
+    /// Target max width for the wrapping prompt label: 40% of the main
+    /// screen, minus the panel's outer padding (~32) and the stack's edge
+    /// insets (~32). Floored to a usable minimum so tiny screens don't make
+    /// the popup unreadable.
+    private func promptMaxLayoutWidth() -> CGFloat {
+        let screenW = NSScreen.main?.frame.width ?? 1440
+        return max(300, screenW * 0.4 - 64)
     }
 
     /// Fetch the terminal app's icon via NSWorkspace, cached per bundle ID.
