@@ -87,10 +87,11 @@ Then explain what happens on push:
 
    ```bash
    scripts/package-dev.sh
-   gh release upload "vX.Y.Z" dist/*
+   scripts/upload-dev.sh             # uploads + publishes (default)
+   # or: scripts/upload-dev.sh --draft  # leave as draft for manual review
    ```
 
-   `package-dev.sh` puts exactly three files in `dist/`: the arch-tagged tarball (`op-who-dev-macos-<arch>.tar.gz`), `SHA256SUMS`, and `SHA256SUMS.sig`.
+   `package-dev.sh` puts exactly three files in `dist/`: the arch-tagged tarball (`op-who-dev-macos-<arch>.tar.gz`), `SHA256SUMS`, and `SHA256SUMS.sig`. `upload-dev.sh` uploads all three to the matching tag's draft release and (by default) flips it to published. The release body was already filled in by `.github/workflows/release.yml` when the tag was pushed — a `## Install` section followed by an auto-generated `## Changes` section.
 
    Once an Apple Developer ID cert is configured and the relevant secrets are in place, switch over to the notarized workflow (`release-notarized.yml`) and use `scripts/release.sh` instead. The signed-checksums flow should remain in place there too — notarization covers Gatekeeper, not artifact tampering at rest.
 3. Review the release notes in the GitHub UI, edit if needed, then publish:

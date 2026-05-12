@@ -107,11 +107,11 @@ This produces three files in `dist/`:
 ### 4. Upload and publish
 
 ```bash
-gh release upload "vX.Y.Z" dist/*
-
-# Review the draft notes in the GitHub UI, edit if needed, then publish:
-gh release edit "vX.Y.Z" --draft=false
+scripts/upload-dev.sh           # uploads dist/* and publishes the release
+scripts/upload-dev.sh --draft   # uploads but leaves the release as a draft
 ```
+
+The script defaults to publishing (`draft=false`). The draft release itself was opened by `.github/workflows/release.yml` on tag push, with `## Install` instructions (from `.github/release-install-template.md`) and a `## Changes` section auto-generated from PR/commit history. Pass `--draft` if you want to review or edit the notes in the GitHub UI before flipping the switch.
 
 ### When the Apple Developer ID cert lands
 

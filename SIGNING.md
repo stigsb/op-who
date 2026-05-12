@@ -52,7 +52,8 @@ git config gpg.ssh.allowedSignersFile .github/allowed_signers
 Then upload all three artifacts to the GitHub Release:
 
 ```bash
-gh release upload v0.5.0 dist/*
+scripts/upload-dev.sh           # uploads dist/* and publishes
+scripts/upload-dev.sh --draft   # uploads, leaves the release as a draft
 ```
 
-`dist/` after `package-dev.sh` contains exactly the three artifacts to upload: the arch-tagged tarball, `SHA256SUMS`, and `SHA256SUMS.sig`.
+`dist/` after `package-dev.sh` contains exactly the three artifacts to upload: the arch-tagged tarball, `SHA256SUMS`, and `SHA256SUMS.sig`. The release itself (with `## Install` + `## Changes` body) is opened as a draft by `.github/workflows/release.yml` on tag push.
