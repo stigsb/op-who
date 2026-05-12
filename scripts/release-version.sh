@@ -3,11 +3,13 @@ set -euo pipefail
 
 # Release automation for op-who.
 #
-# Reads a changelog entry from stdin, bumps the version in Info.plist,
-# prepends the entry to CHANGELOG.md, commits, and tags.
+# Reads a changelog entry from stdin, updates the version in Info.plist
+# (either by bumping or setting an explicit value), prepends the entry to
+# CHANGELOG.md, commits, and tags.
 #
 # Usage:
 #   echo "changelog text" | scripts/release-version.sh --bump minor
+#   echo "changelog text" | scripts/release-version.sh --set 0.5.0
 
 cd "$(dirname "$0")/.."
 
@@ -17,12 +19,17 @@ CHANGELOG="CHANGELOG.md"
 # --- Parse arguments ---
 
 BUMP=""
+SET_VERSION=""
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bump)
             BUMP="$2"
+            shift 2
+            ;;
+        --set)
+            SET_VERSION="$2"
             shift 2
             ;;
         --dry-run)
@@ -36,13 +43,23 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$BUMP" ]]; then
-    echo "Usage: scripts/release-version.sh --bump {major|minor|patch}" >&2
+if [[ -n "$BUMP" && -n "$SET_VERSION" ]]; then
+    echo "error: --bump and --set are mutually exclusive" >&2
     exit 1
 fi
 
-if [[ "$BUMP" != "major" && "$BUMP" != "minor" && "$BUMP" != "patch" ]]; then
+if [[ -z "$BUMP" && -z "$SET_VERSION" ]]; then
+    echo "Usage: scripts/release-version.sh {--bump major|minor|patch | --set X.Y.Z}" >&2
+    exit 1
+fi
+
+if [[ -n "$BUMP" && "$BUMP" != "major" && "$BUMP" != "minor" && "$BUMP" != "patch" ]]; then
     echo "error: --bump must be major, minor, or patch" >&2
+    exit 1
+fi
+
+if [[ -n "$SET_VERSION" && ! "$SET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: --set must be X.Y.Z (e.g. 0.5.0)" >&2
     exit 1
 fi
 
@@ -59,13 +76,23 @@ fi
 OLD_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")
 IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
 
-# --- Bump version ---
+# --- Resolve target version ---
 
-case "$BUMP" in
-    major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
-    minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
-    patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
-esac
+if [[ -n "$SET_VERSION" ]]; then
+    NEW_VERSION="$SET_VERSION"
+else
+    case "$BUMP" in
+        major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+        minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+        patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+    esac
+fi
+
+# Refuse to re-tag an existing version.
+if git rev-parse -q --verify "refs/tags/v${NEW_VERSION}" >/dev/null; then
+    echo "error: tag v${NEW_VERSION} already exists" >&2
+    exit 1
+fi
 
 echo "Version: $OLD_VERSION -> $NEW_VERSION"
 echo "Changelog:"
