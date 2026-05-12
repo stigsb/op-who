@@ -47,7 +47,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux trusthere")
+        #expect(text == "trusthere · cmux")
     }
 
     @Test func cmuxSurfaceWithGenericWorkspaceTitleAndNoDescriptionOmitsWorkspace() {
@@ -82,7 +82,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux scratch experiments")
+        #expect(text == "scratch experiments · cmux")
     }
 
     @Test func cmuxSurfaceWithGenericSurfaceTitleOmitsTabClause() {
@@ -98,7 +98,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux trusthere")
+        #expect(text == "trusthere · cmux")
     }
 
     // MARK: - cmuxSurface absent (fallback path)
@@ -132,7 +132,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "1. zsh — work", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab 1. zsh — work")
+        #expect(text == "1. zsh — work · iTerm")
     }
 
     @Test func noSurfaceAndNoTabTitleReturnsTermNameOnly() {
@@ -150,7 +150,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "mattermost", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab mattermost")
+        #expect(text == "mattermost · iTerm")
     }
 
     @Test func tabTitlePlusShortcutShowsBoth() {
@@ -160,7 +160,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "mattermost", tabShortcut: "⌘3", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab mattermost ⌘3")
+        #expect(text == "mattermost · iTerm ⌘3")
     }
 
     @Test func tabTitlePlusMultiWindowShortcut() {
@@ -168,7 +168,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "mattermost", tabShortcut: "window 2 ⌘1", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab mattermost window 2 ⌘1")
+        #expect(text == "mattermost · iTerm window 2 ⌘1")
     }
 
     @Test func shortcutOnlyRendersWithoutTabWrapping() {
@@ -216,7 +216,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux trusthere ⌘2 ⌃1")
+        #expect(text == "trusthere · cmux ⌘2 ⌃1")
     }
 
     @Test func cmuxSingleTabWorkspaceHidesTabShortcut() {
@@ -236,7 +236,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux trusthere ⌘2")
+        #expect(text == "trusthere · cmux ⌘2")
     }
 
     @Test func cmuxMultipleTabsKeepTabShortcut() {
@@ -254,7 +254,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux trusthere ⌘2 ⌃1")
+        #expect(text == "trusthere · cmux ⌘2 ⌃1")
     }
 
     @Test func cmuxSurfaceShortcutOnlyWhenIndexPresent() {
@@ -272,6 +272,6 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux trusthere ⌃3")
+        #expect(text == "trusthere · cmux ⌃3")
     }
 }

@@ -279,24 +279,25 @@ class OverlayPanel {
             row.addArrangedSubview(spacer)
         }
 
-        // Main title label: terminal prefix (dim) + user-visible title (bright).
-        // Stretches to fill remaining horizontal space so trailing shortcuts
-        // and timer can right-align.
+        // Main title label: user-visible title (bright) + terminal qualifier (dim).
+        // Workspace/tab name leads because it's what the user actually recognizes;
+        // the terminal name trails as a subdued qualifier. Stretches to fill
+        // remaining horizontal space so trailing shortcuts and timer can right-align.
         let label = makeLabel("", size: 13, weight: .semibold, color: .labelColor)
         let mainFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
         let dim = NSColor.secondaryLabelColor
         let bright = NSColor.labelColor
         let attr = NSMutableAttributedString()
-        attr.append(NSAttributedString(
-            string: parts.prefix,
-            attributes: [.font: mainFont, .foregroundColor: dim]
-        ))
         if !parts.title.isEmpty {
             attr.append(NSAttributedString(
                 string: parts.title,
                 attributes: [.font: mainFont, .foregroundColor: bright]
             ))
         }
+        attr.append(NSAttributedString(
+            string: parts.qualifier,
+            attributes: [.font: mainFont, .foregroundColor: dim]
+        ))
         label.attributedStringValue = attr
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
@@ -350,25 +351,29 @@ class OverlayPanel {
         return row
     }
 
-    /// Decomposition of row 1 for styled rendering. The title is rendered
-    /// in a slightly brighter color than the surrounding `prefix` / `suffix`
-    /// so the user-visible workspace/tab name stands out without needing
-    /// quotes around it.
+    /// Decomposition of row 1 for styled rendering. `title` is rendered first
+    /// in a brighter color so the user-visible workspace/tab name leads;
+    /// `qualifier` trails in a dim color as a terminal-app annotation.
     struct TerminalRowParts: Equatable {
-        /// Lead text rendered in the dim color (e.g. "cmux", "iTerm tab").
-        /// Trailing space is included when a title follows.
-        let prefix: String
-        /// User-visible title to highlight (e.g. "trusthere", "1. zsh — work").
-        /// Empty when no title is available.
+        /// User-visible title (e.g. "trusthere", "1. zsh — work"), rendered
+        /// first in the bright color. Empty when no title is available, in
+        /// which case `qualifier` is the bare terminal name.
         let title: String
-        /// Trailing text after the title (e.g. " ⌘2 ⌃1"). May be empty.
+        /// Dim qualifier rendered after the title. When `title` is non-empty
+        /// this is something like " · cmux" or " · iTerm" (separator + term
+        /// name). When `title` is empty this is just the bare terminal name
+        /// with no leading separator.
+        let qualifier: String
+        /// Trailing keyboard-shortcut text (cmux's " ⌘N ⌃M"). Goes into the
+        /// separate trailing shortcuts label, not the main title attributed
+        /// string. May be empty.
         let suffix: String
-        /// Legacy iTerm shortcut hint rendered in a subdued accent color
-        /// (e.g. "⌘3", "window 2 ⌘1"). nil when not applicable.
+        /// Legacy iTerm shortcut hint (e.g. "⌘3", "window 2 ⌘1"). nil when
+        /// not applicable. Also goes into the trailing shortcuts label.
         let shortcut: String?
 
         /// Backward-compatible flat-string composition used by tests/logging.
-        var main: String { prefix + title + suffix }
+        var main: String { title + qualifier + suffix }
     }
 
     /// Build the parts of row 1.
@@ -387,34 +392,34 @@ class OverlayPanel {
 
             if !wsTitle.isEmpty {
                 return TerminalRowParts(
-                    prefix: "\(termName) ",
                     title: wsTitle,
+                    qualifier: " · \(termName)",
                     suffix: "\(wsKey)\(tabKey)",
                     shortcut: nil
                 )
             }
             if !wsKey.isEmpty || !tabKey.isEmpty {
                 return TerminalRowParts(
-                    prefix: termName, title: "", suffix: "\(wsKey)\(tabKey)", shortcut: nil
+                    title: "", qualifier: termName, suffix: "\(wsKey)\(tabKey)", shortcut: nil
                 )
             }
-            return TerminalRowParts(prefix: termName, title: "", suffix: "", shortcut: nil)
+            return TerminalRowParts(title: "", qualifier: termName, suffix: "", shortcut: nil)
         }
         // For cmux without surface info, AX window title is unreliable
         // (returns "Item-0" placeholders rather than the visible workspace
         // name). Show only the terminal name.
         if isCmuxBundleID(entry.terminalBundleID) {
-            return TerminalRowParts(prefix: termName, title: "", suffix: "", shortcut: nil)
+            return TerminalRowParts(title: "", qualifier: termName, suffix: "", shortcut: nil)
         }
         let title = entry.tabTitle?.trimmingCharacters(in: .whitespaces) ?? ""
         let shortcut = entry.tabShortcut?.trimmingCharacters(in: .whitespaces)
         let shortcutOrNil = (shortcut?.isEmpty ?? true) ? nil : shortcut
         if !title.isEmpty {
             return TerminalRowParts(
-                prefix: "\(termName) tab ", title: title, suffix: "", shortcut: shortcutOrNil
+                title: title, qualifier: " · \(termName)", suffix: "", shortcut: shortcutOrNil
             )
         }
-        return TerminalRowParts(prefix: termName, title: "", suffix: "", shortcut: shortcutOrNil)
+        return TerminalRowParts(title: "", qualifier: termName, suffix: "", shortcut: shortcutOrNil)
     }
 
     /// Flat-string composition of row 1. Kept for callers (tests, logging)
