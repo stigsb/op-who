@@ -34,11 +34,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         )
         startupMenuItem.target = self
+        // Explicit checkbox glyphs in both states so the off state isn't a
+        // blank gap that leaves the user guessing.
+        startupMenuItem.onStateImage = NSImage(
+            systemSymbolName: "checkmark.square.fill",
+            accessibilityDescription: "Enabled"
+        )
+        startupMenuItem.offStateImage = NSImage(
+            systemSymbolName: "square",
+            accessibilityDescription: "Disabled"
+        )
         updateStartupMenuItemState()
         menu.addItem(startupMenuItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
-            title: "Quit",
+            title: "Quit op-who",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         ))
