@@ -320,10 +320,15 @@ public class OnePasswordWatcher {
 
         let displayedEntries = [chosen.entry]
 
-        // Track the dialog window and the surviving trigger PID so we can
-        // dismiss when either disappears.
+        // Track *all* surviving candidate PIDs, not just the displayed one.
+        // git/ssh workflows routinely spawn sibling processes (control-master
+        // auth helper + session, fetch-pack + push-pack, etc.) and the one we
+        // pick for display may exit seconds before the one actually waiting
+        // on the user's approval. Dismiss only when every viable trigger has
+        // exited — that's the moment the dialog can plausibly be done.
         trackedDialogElement = element
-        trackedProcessPIDs = Set(displayedEntries.map { $0.pid })
+        trackedProcessPIDs = Set(candidates.map { $0.entry.pid })
+        Log.watcher.debug("tracking pids=\(self.trackedProcessPIDs.sorted(), privacy: .public) displayed=\(chosen.entry.pid, privacy: .public)")
         startDialogPolling()
 
         Log.watcher.debug("dialog-shown entries=\(jsonDump(entries: displayedEntries), privacy: .public) candidates=\(candidates.count, privacy: .public)")
@@ -391,14 +396,17 @@ public class OnePasswordWatcher {
 
         Log.watcher.debug("poll-tick windowGone=\(windowGone, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public) live=\(livePIDs.sorted(), privacy: .public)")
 
-        // Only the trigger process is authoritative. If it is still running,
-        // the dialog must still be pending — even if AX claims the window has
-        // gone (kAXErrorInvalidUIElement: -25202) and a rescan returns no
-        // dialog. Electron-rendered dialogs intermittently invalidate their
-        // AX element while remaining visible to the user, and acting on that
-        // would tear the overlay down prematurely. Process exit is the only
-        // signal we can fully trust.
-        guard procsGone else { return }
+        // Dismiss only when *both* signals agree the dialog is over.
+        //
+        // - Process-alive overrides AX-gone: Electron-rendered dialogs
+        //   intermittently invalidate their AX element while remaining visible,
+        //   so a live trigger process means the overlay must stay up.
+        // - AX-alive overrides process-gone: SSH siblings (control-master
+        //   helper + session, fetch-pack + push-pack, etc.) sometimes exit
+        //   while the approval prompt remains on screen waiting on the user.
+        //   If AX still reports the window as valid, trust that — the overlay
+        //   should outlive the trigger processes in that case.
+        guard procsGone && windowGone else { return }
 
         Log.watcher.info("Dismissing overlay: windowGone=\(windowGone, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) procsGone=true tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public) live=\(livePIDs.sorted(), privacy: .public)")
         DispatchQueue.main.async { [weak self] in
