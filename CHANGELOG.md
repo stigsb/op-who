@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Changed: `install.sh` is now dual-mode — when invoked standalone (e.g. downloaded directly from a GitHub Release page) it downloads the matching release tarball + signed checksums, verifies against `https://github.com/stigsb.keys`, extracts, and installs. When invoked from inside an unpacked tarball it installs from the siblings as before. `scripts/package-dev.sh` patches the release version into the script at package time; the standalone copy is exposed as a top-level release artifact alongside the tarball and is covered by `SHA256SUMS`.
+
 ## [0.5.0] - 2026-05-12
 
 - Added: macOS menu-bar utility that identifies which process triggered a 1Password approval dialog (CLI or SSH agent), driven by the Accessibility API and shown as an overlay near the 1Password window.

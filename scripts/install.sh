@@ -3,35 +3,75 @@ set -euo pipefail
 
 # Install op-who from a developer-build package.
 #
-# Designed to run from inside the unpacked tarball produced by
-# scripts/package-dev.sh:
+# Runs in one of two modes:
 #
-#   tar xzf op-who-dev.tar.gz
-#   cd op-who-dev
-#   ./install.sh
+# Inside-tarball mode (the historical use): when invoked from a directory
+# that already contains op-who.app and op-who-dev-cert.pem (i.e. extracted
+# from op-who-dev.tar.gz), install directly from those siblings.
 #
-# Steps:
-#   1. Import the public cert into the login keychain (idempotent).
-#   2. Copy op-who.app into /Applications, replacing any prior copy.
-#   3. Strip the macOS quarantine xattr so first launch doesn't bounce.
-#   4. Verify the signature now resolves against the imported cert.
-#   5. Print Accessibility next-steps (TCC can't be scripted).
+# Standalone mode: when invoked on its own (e.g. downloaded from a GitHub
+# Release), download the matching release artifacts, verify their signature
+# against https://github.com/<user>.keys, verify the checksums, extract, and
+# fall through into the inside-tarball install path.
+#
+# The standalone path is pinned to a specific release version, baked in at
+# package time by scripts/package-dev.sh. Running an unpatched copy
+# (VERSION placeholder still in place) is refused.
+
+VERSION="__VERSION__"
+REPO="stigsb/op-who"
+GH_USER="stigsb"
+SIGNER_EMAIL="stig@stigbakken.com"
 
 PRODUCT="op-who"
 APP_NAME="${PRODUCT}.app"
 CERT_FILE="${PRODUCT}-dev-cert.pem"
+TARBALL="${PRODUCT}-dev.tar.gz"
 INSTALL_DIR="/Applications"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
-cd "$(dirname "$0")"
-
-if [[ ! -d "$APP_NAME" ]]; then
-    echo "error: $APP_NAME not found in $(pwd)" >&2
+if [[ "$VERSION" == "__VERSION__" ]]; then
+    echo "error: this install.sh is unpatched (VERSION placeholder still present)." >&2
+    echo "Download a release-pinned copy from:" >&2
+    echo "  https://github.com/${REPO}/releases" >&2
     exit 1
 fi
-if [[ ! -f "$CERT_FILE" ]]; then
-    echo "error: $CERT_FILE not found in $(pwd)" >&2
-    exit 1
+
+cd "$(dirname "$0")"
+
+# --- 0. Standalone mode: fetch + verify + extract --------------------------
+
+if [[ ! -d "$APP_NAME" || ! -f "$CERT_FILE" ]]; then
+    echo "op-who ${VERSION} — downloading release artifacts..."
+    TMP=$(mktemp -d)
+    trap 'rm -rf "$TMP"' EXIT
+
+    BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+    for f in "$TARBALL" SHA256SUMS SHA256SUMS.sig; do
+        curl -fsSL --proto '=https' -o "${TMP}/${f}" "${BASE_URL}/${f}"
+    done
+
+    echo "Verifying signature against https://github.com/${GH_USER}.keys..."
+    curl -fsSL --proto '=https' "https://github.com/${GH_USER}.keys" \
+        | awk -v who="$SIGNER_EMAIL" '{print who, "namespaces=\"file\"", $0}' \
+        > "${TMP}/allowed_signers"
+    if [[ ! -s "${TMP}/allowed_signers" ]]; then
+        echo "error: ${GH_USER}.keys returned no keys — cannot establish trust root." >&2
+        exit 1
+    fi
+    ssh-keygen -Y verify \
+        -f "${TMP}/allowed_signers" \
+        -I "$SIGNER_EMAIL" \
+        -n file \
+        -s "${TMP}/SHA256SUMS.sig" \
+        < "${TMP}/SHA256SUMS"
+
+    echo "Verifying checksums..."
+    (cd "$TMP" && shasum -a 256 -c SHA256SUMS --ignore-missing)
+
+    echo "Extracting ${TARBALL}..."
+    tar -C "$TMP" -xzf "${TMP}/${TARBALL}"
+    cd "${TMP}/${PRODUCT}-dev"
 fi
 
 # --- 1. Import cert ---------------------------------------------------------
@@ -87,6 +127,11 @@ Next step — grant Accessibility (one time):
 Open that pane now? [y/N]
 EOF
 
+# Re-attach the controlling tty so the prompt works even when this script
+# was invoked from a pipe (e.g. curl ... | bash).
+if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
+    exec </dev/tty
+fi
 read -r reply
 case "$reply" in
     [yY]*) open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" ;;

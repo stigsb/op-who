@@ -44,8 +44,12 @@ ditto "$APP_DIR" "$DIST_DIR/${APP_NAME}"
 # Export the public certificate as PEM (no private key).
 security find-certificate -c "$SIGN_IDENTITY" -p > "$DIST_DIR/${PRODUCT}-dev-cert.pem"
 
-# Stage the installer that the recipient runs.
-cp scripts/install.sh "$DIST_DIR/install.sh"
+# Stage the installer that the recipient runs. Pin the VERSION placeholder
+# to the value currently in Info.plist so the script's standalone-download
+# mode targets the matching release. The same patched copy goes into both
+# the tarball and (later) dist/install.sh.
+VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Sources/OpWhoLib/Info.plist)
+sed "s/__VERSION__/v${VERSION}/" scripts/install.sh > "$DIST_DIR/install.sh"
 chmod +x "$DIST_DIR/install.sh"
 
 # Include a short README so recipients aren't guessing.
@@ -81,14 +85,20 @@ EOF
 # Final tarball.
 tar -C dist -czf "$TARBALL" "${PRODUCT}-dev"
 
-# Sign the tarball. Produces dist/SHA256SUMS and dist/SHA256SUMS.sig
-# covering every top-level file in dist/ (the tarball, today). The signed
+# Also expose install.sh as a top-level artifact so recipients can read
+# (and trust-verify) the installer logic before extracting the tarball.
+# The copy is byte-identical to the one inside the tarball.
+cp "$DIST_DIR/install.sh" "dist/install.sh"
+
+# Sign every top-level file in dist/. Produces dist/SHA256SUMS and
+# dist/SHA256SUMS.sig covering the tarball and install.sh. The signed
 # checksum file is the trust anchor end users verify against — see
 # SIGNING.md for the recipient flow.
 scripts/sign-artifacts.sh dist
 
 echo ""
 echo "Packaged:    $TARBALL"
+echo "Installer:   dist/install.sh"
 echo "Checksums:   dist/SHA256SUMS"
 echo "Signature:   dist/SHA256SUMS.sig"
 echo "Staged dir:  $DIST_DIR/"
