@@ -100,17 +100,14 @@ scripts/package-dev.sh
 ```
 
 This produces three files in `dist/`:
-- `op-who-dev.tar.gz` — the dev-build package (app + cert + `install.sh`)
+- `op-who-dev-macos-<arch>.tar.gz` — the dev-build package (app + cert + `install.sh`), where `<arch>` is the host CPU (`arm64` or `x86_64` from `uname -m`)
 - `SHA256SUMS` — checksums of every top-level file in `dist/`
 - `SHA256SUMS.sig` — SSH signature over `SHA256SUMS`
 
 ### 4. Upload and publish
 
 ```bash
-gh release upload "vX.Y.Z" \
-    dist/op-who-dev.tar.gz \
-    dist/SHA256SUMS \
-    dist/SHA256SUMS.sig
+gh release upload "vX.Y.Z" dist/*
 
 # Review the draft notes in the GitHub UI, edit if needed, then publish:
 gh release edit "vX.Y.Z" --draft=false

@@ -7,7 +7,12 @@ set -euo pipefail
 # with the public half of the local dev cert so a recipient can run install.sh
 # and get a TCC-stable install (Accessibility grant survives rebuilds).
 #
-# Output: dist/op-who-dev.tar.gz containing
+# The tarball is arch-tagged (uname -m, e.g. arm64, x86_64) so end users can
+# tell at a glance whether an artifact matches their machine. macOS is in the
+# name explicitly too — the .app format implies it, but explicit > implicit
+# on a release page.
+#
+# Output: dist/op-who-dev-macos-<arch>.tar.gz containing
 #   - op-who.app (release build, signed with the local dev cert)
 #   - op-who-dev-cert.pem (public certificate only, no private key)
 #   - install.sh
@@ -19,6 +24,8 @@ set -euo pipefail
 SIGN_IDENTITY="${OP_WHO_SIGN_IDENTITY:-op-who Local Dev}"
 PRODUCT="op-who"
 APP_NAME="${PRODUCT}.app"
+ARCH=$(uname -m)
+SLUG="${PRODUCT}-dev-macos-${ARCH}"
 
 cd "$(dirname "$0")/.."
 
@@ -32,10 +39,12 @@ fi
 scripts/bundle.sh release
 
 APP_DIR=".build/${APP_NAME}"
-DIST_DIR="dist/${PRODUCT}-dev"
-TARBALL="dist/${PRODUCT}-dev.tar.gz"
+DIST_DIR="dist/${SLUG}"
+TARBALL="dist/${SLUG}.tar.gz"
 
-rm -rf "$DIST_DIR" "$TARBALL"
+# Clean dist/ so stale artifacts from a previous arch or naming scheme don't
+# slip into the next release upload by accident.
+rm -rf dist
 mkdir -p "$DIST_DIR"
 
 # Copy the app.
@@ -44,27 +53,17 @@ ditto "$APP_DIR" "$DIST_DIR/${APP_NAME}"
 # Export the public certificate as PEM (no private key).
 security find-certificate -c "$SIGN_IDENTITY" -p > "$DIST_DIR/${PRODUCT}-dev-cert.pem"
 
-# Stage the installer that the recipient runs. Pin the VERSION placeholder
-# to the value currently in Info.plist so the script's standalone-download
-# mode targets the matching release. The same patched copy goes into both
-# the tarball and (later) dist/install.sh.
-#
-# The pattern is anchored to the full assignment line so the unpatched-copy
-# sentinel (a second `__VERSION__` literal inside the equality check) stays
-# put. Patching both would make the check tautological.
-VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Sources/OpWhoLib/Info.plist)
-sed "s/^VERSION=\"__VERSION__\"\$/VERSION=\"v${VERSION}\"/" scripts/install.sh > "$DIST_DIR/install.sh"
-if ! grep -q "^VERSION=\"v${VERSION}\"\$" "$DIST_DIR/install.sh"; then
-    echo "error: failed to patch VERSION in install.sh" >&2
-    exit 1
-fi
+# Stage the installer that the recipient runs — verbatim from scripts/install.sh.
+# No patching: the installer is tarball-relative and doesn't need to know the
+# release version.
+cp scripts/install.sh "$DIST_DIR/install.sh"
 chmod +x "$DIST_DIR/install.sh"
 
 # Include a short README so recipients aren't guessing.
 CERT_FINGERPRINT=$(security find-certificate -c "$SIGN_IDENTITY" -Z 2>/dev/null \
     | awk '/SHA-256 hash:/ {print $3}')
 cat > "$DIST_DIR/README.txt" <<EOF
-op-who (developer build)
+op-who (developer build, macOS ${ARCH})
 
 This is a self-signed build distributed before an Apple Developer ID cert is
 available. The certificate is local to the developer's machine, not issued by
@@ -91,23 +90,19 @@ trusted channel:
 EOF
 
 # Final tarball.
-tar -C dist -czf "$TARBALL" "${PRODUCT}-dev"
+tar -C dist -czf "$TARBALL" "${SLUG}"
 
-# Also expose install.sh as a top-level artifact so recipients can read
-# (and trust-verify) the installer logic before extracting the tarball.
-# The copy is byte-identical to the one inside the tarball.
-cp "$DIST_DIR/install.sh" "dist/install.sh"
+# Remove the staging directory so dist/ contains only the artifacts that get
+# uploaded to the release: the tarball, SHA256SUMS, and SHA256SUMS.sig.
+rm -rf "$DIST_DIR"
 
 # Sign every top-level file in dist/. Produces dist/SHA256SUMS and
-# dist/SHA256SUMS.sig covering the tarball and install.sh. The signed
-# checksum file is the trust anchor end users verify against — see
-# SIGNING.md for the recipient flow.
+# dist/SHA256SUMS.sig covering the tarball. The signed checksum file is the
+# trust anchor end users verify against — see SIGNING.md for the recipient flow.
 scripts/sign-artifacts.sh dist
 
 echo ""
 echo "Packaged:    $TARBALL"
-echo "Installer:   dist/install.sh"
 echo "Checksums:   dist/SHA256SUMS"
 echo "Signature:   dist/SHA256SUMS.sig"
-echo "Staged dir:  $DIST_DIR/"
 echo "Cert fingerprint (SHA-256): $CERT_FINGERPRINT"

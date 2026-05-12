@@ -6,8 +6,8 @@ Tags and release artifacts for op-who are signed with the maintainer's SSH key. 
 
 The trust root is **`https://github.com/stigsb.keys`** — GitHub serves the maintainer's public SSH keys over TLS, anchored to the `stigsb` account. Every other key file (including any `allowed_signers` that may appear in the repo or in a release) is convenience only; **do not** treat them as authoritative.
 
-Each release ships three artifacts:
-- `op-who-dev.tar.gz` — the package
+Each release ships three artifacts (the tarball name encodes the CPU — `arm64` for Apple Silicon, `x86_64` for Intel):
+- `op-who-dev-macos-<arch>.tar.gz` — the package
 - `SHA256SUMS` — checksums of the package
 - `SHA256SUMS.sig` — SSH signature over `SHA256SUMS`
 
@@ -26,7 +26,7 @@ shasum -a 256 -c SHA256SUMS
 rm -rf "$TMP"
 ```
 
-If the first command prints `Good "file" signature for stig@stigbakken.com` and the second prints `op-who-dev.tar.gz: OK`, the tarball is authentic to the maintainer's GitHub-listed key.
+If the first command prints `Good "file" signature for stig@stigbakken.com` and the second prints `op-who-dev-macos-<arch>.tar.gz: OK`, the tarball is authentic to the maintainer's GitHub-listed key.
 
 Threat model: GitHub TLS + integrity of the `stigsb` GitHub account vouch for the signing key. An attacker who replaces the release page cannot make the signature verify unless they also compromise the GitHub account. If you don't trust GitHub or this account, no signature on a release page can help — you would need the key fingerprint out of band.
 
@@ -52,8 +52,7 @@ git config gpg.ssh.allowedSignersFile .github/allowed_signers
 Then upload all three artifacts to the GitHub Release:
 
 ```bash
-gh release upload v0.5.0 \
-    dist/op-who-dev.tar.gz \
-    dist/SHA256SUMS \
-    dist/SHA256SUMS.sig
+gh release upload v0.5.0 dist/*
 ```
+
+`dist/` after `package-dev.sh` contains exactly the three artifacts to upload: the arch-tagged tarball, `SHA256SUMS`, and `SHA256SUMS.sig`.

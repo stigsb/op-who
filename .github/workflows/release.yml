@@ -1,7 +1,8 @@
 name: Release
 
 # Opens a draft GitHub Release on every `v*` tag push. Artifacts are uploaded
-# manually (e.g. via `gh release upload v0.1.0 dist/op-who-dev.tar.gz`).
+# manually after running `scripts/package-dev.sh` (e.g. via `gh release upload
+# vX.Y.Z dist/*`).
 #
 # When the notarized pipeline takes over, either repurpose this workflow or
 # remove it and re-enable release-notarized.yml's tag trigger.

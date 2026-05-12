@@ -87,11 +87,10 @@ Then explain what happens on push:
 
    ```bash
    scripts/package-dev.sh
-   gh release upload "vX.Y.Z" \
-       dist/op-who-dev.tar.gz \
-       dist/SHA256SUMS \
-       dist/SHA256SUMS.sig
+   gh release upload "vX.Y.Z" dist/*
    ```
+
+   `package-dev.sh` puts exactly three files in `dist/`: the arch-tagged tarball (`op-who-dev-macos-<arch>.tar.gz`), `SHA256SUMS`, and `SHA256SUMS.sig`.
 
    Once an Apple Developer ID cert is configured and the relevant secrets are in place, switch over to the notarized workflow (`release-notarized.yml`) and use `scripts/release.sh` instead. The signed-checksums flow should remain in place there too — notarization covers Gatekeeper, not artifact tampering at rest.
 3. Review the release notes in the GitHub UI, edit if needed, then publish:

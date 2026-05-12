@@ -19,18 +19,18 @@ When 1Password shows its approval dialog, op-who pops up a floating overlay show
 
 > op-who is currently distributed as a **self-signed dev build** pending an Apple Developer ID certificate and notarization. Trust is anchored at `https://github.com/stigsb.keys` (TLS + GitHub account integrity). See [SIGNING.md](SIGNING.md) for the threat model.
 
-Download and run the installer from the [latest release](https://github.com/stigsb/op-who/releases/latest):
+Each release ships a tarball named for your CPU — `op-who-dev-macos-arm64.tar.gz` for Apple Silicon, `op-who-dev-macos-x86_64.tar.gz` for Intel — alongside `SHA256SUMS` and `SHA256SUMS.sig`. Download all three from the [latest release](https://github.com/stigsb/op-who/releases/latest), verify the signature and checksums per [SIGNING.md](SIGNING.md), then:
 
 ```bash
-curl -fsSLO https://github.com/stigsb/op-who/releases/latest/download/install.sh
-bash install.sh
+ARCH=$(uname -m)
+tar xzf "op-who-dev-macos-${ARCH}.tar.gz"
+cd "op-who-dev-macos-${ARCH}"
+./install.sh
 ```
 
-`install.sh` downloads the release tarball and signed checksums, verifies them against the maintainer's GitHub-published SSH key over TLS, installs `op-who.app` to `/Applications`, imports the developer certificate, and prompts you to grant Accessibility — a one-time manual step macOS does not allow to be scripted.
+The bundled `install.sh` imports the developer certificate into your login keychain, copies `op-who.app` to `/Applications`, strips the quarantine attribute, and prompts you to grant Accessibility — a one-time manual step macOS does not allow to be scripted.
 
 After install, look for the op-who icon in your menu bar. When 1Password shows an approval dialog, the overlay appears next to it.
-
-To verify `install.sh` itself against the signed checksums before running it, follow the manual verification flow in [SIGNING.md](SIGNING.md).
 
 When Apple-notarized builds are available, the install path will move to a Homebrew tap.
 
