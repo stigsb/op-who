@@ -42,10 +42,30 @@ public func makeRequestSummary(
     tabTitle: String?,
     claudeSession: String?,
     terminalBundleID: String?,
-    cwd: String?
+    cwd: String?,
+    pluginUpdate: ClaudePluginUpdate? = nil
 ) -> RequestSummary {
     let trigger = chain.first
     let kind = classifyKind(trigger: trigger)
+
+    // Claude Code background fetches that update plugins/marketplaces are
+    // housekeeping — the user didn't ask for them. Render them with a single
+    // self-contained title that names the remote being fetched, so the
+    // 1Password approval has obvious provenance.
+    if let update = pluginUpdate {
+        var subtitleParts: [String] = []
+        if let term = humanTerminalName(bundleID: terminalBundleID) {
+            subtitleParts.append(term)
+        }
+        if let cwd = cwd { subtitleParts.append(cwd) }
+        return RequestSummary(
+            kind: kind,
+            title: "Claude plugin update check from \(update.remoteURL)",
+            subtitle: subtitleParts.isEmpty ? nil : subtitleParts.joined(separator: " · "),
+            isWarning: false
+        )
+    }
+
     let actor = describeActor(
         chain: chain,
         tabTitle: tabTitle,

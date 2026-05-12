@@ -17,7 +17,7 @@ private func entry(pid: pid_t, chain: [ProcessNode]) -> OverlayPanel.ProcessEntr
         claudeSession: nil, claudeContext: nil,
         terminalBundleID: nil, terminalPID: nil, cwd: nil,
         cmuxWorkspaceID: nil, cmuxTabID: nil, cmuxSurface: nil,
-        startTime: nil
+        startTime: nil, pluginUpdate: nil
     )
 }
 

@@ -22,6 +22,9 @@ class OverlayPanel {
         let cmuxSurface: CmuxSurfaceInfo?
         /// Start time of the trigger process — used for the elapsed-time column.
         let startTime: Date?
+        /// Set when the trigger is a `git` operation Claude Code initiated
+        /// in the background to refresh a plugin/marketplace repo.
+        let pluginUpdate: ClaudePluginUpdate?
     }
 
     private var panel: NSPanel?
@@ -158,7 +161,8 @@ class OverlayPanel {
             tabTitle: entry.tabTitle,
             claudeSession: entry.claudeSession,
             terminalBundleID: entry.terminalBundleID,
-            cwd: entry.cwd
+            cwd: entry.cwd,
+            pluginUpdate: entry.pluginUpdate
         ).kind
 
         // Three structured lead lines.
@@ -456,6 +460,14 @@ class OverlayPanel {
     /// Row 3: the requested operation — `op item list`, `op read op://X/Y`,
     /// `git fetch origin`, etc. Color-coded by kind.
     private func makeOperationRow(_ entry: ProcessEntry, kind: RequestKind) -> NSView {
+        if let update = entry.pluginUpdate {
+            return makeIconRow(
+                icon: nil,
+                text: "plugin update check from \(update.remoteURL)",
+                size: 12, weight: .medium, color: .secondaryLabelColor,
+                mono: true
+            )
+        }
         let text = operationDisplay(argv: entry.triggerArgv, chain: entry.chain, cwd: entry.cwd)
         return makeIconRow(
             icon: nil,

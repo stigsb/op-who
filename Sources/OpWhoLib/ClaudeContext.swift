@@ -186,3 +186,95 @@ private func truncate(_ s: String, max: Int = 160) -> String {
     if clean.count <= max { return clean }
     return clean.prefix(max - 1) + "…"
 }
+
+// MARK: - Claude plugin update detection
+
+/// Marker for a `git` operation that Claude Code initiated in the background
+/// to refresh a plugin/marketplace repository under `~/.claude/plugins/`.
+/// Such fetches are housekeeping — the user didn't ask for them — so we
+/// label them distinctly so the user knows what 1Password is asking about.
+public struct ClaudePluginUpdate: Equatable {
+    /// Remote URL from the plugin repo's `.git/config`
+    /// (e.g. `git@github.com:cloudflare/skills.git`).
+    public let remoteURL: String
+
+    public init(remoteURL: String) {
+        self.remoteURL = remoteURL
+    }
+}
+
+/// Look up plugin-update info for a CWD. Returns nil unless the CWD lives
+/// inside `~/.claude/plugins/` AND we can locate and parse a `.git/config`
+/// at some directory between the CWD and the plugins root.
+public func claudePluginUpdate(forCWD cwd: String?) -> ClaudePluginUpdate? {
+    guard let cwd = cwd,
+          let repoRoot = claudePluginRepoRoot(forCWD: cwd) else { return nil }
+    let configPath = (repoRoot as NSString).appendingPathComponent(".git/config")
+    guard let content = try? String(contentsOfFile: configPath, encoding: .utf8),
+          let url = parseGitOriginURL(gitConfig: content) else { return nil }
+    return ClaudePluginUpdate(remoteURL: url)
+}
+
+/// Walk up from `cwd` toward `~/.claude/plugins/` looking for the first
+/// directory containing `.git/config`. Returns nil if `cwd` isn't inside
+/// the plugins tree, or if no `.git` ancestor was found before escaping it.
+public func claudePluginRepoRoot(forCWD cwd: String) -> String? {
+    let pluginsBase = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/plugins", isDirectory: true)
+        .path
+    return pluginRepoRoot(cwd: cwd, pluginsBase: pluginsBase, fileExists: { path in
+        FileManager.default.fileExists(atPath: path)
+    })
+}
+
+/// Pure helper exposed for tests: walks up from `cwd` until it either finds
+/// a directory whose `.git/config` exists (per `fileExists`) or escapes the
+/// `pluginsBase` prefix.
+func pluginRepoRoot(
+    cwd: String,
+    pluginsBase: String,
+    fileExists: (String) -> Bool
+) -> String? {
+    guard cwd == pluginsBase || cwd.hasPrefix(pluginsBase + "/") else { return nil }
+    var dir = cwd
+    while dir == pluginsBase || dir.hasPrefix(pluginsBase + "/") {
+        let configPath = (dir as NSString).appendingPathComponent(".git/config")
+        if fileExists(configPath) { return dir }
+        let parent = (dir as NSString).deletingLastPathComponent
+        if parent == dir { break }
+        dir = parent
+    }
+    return nil
+}
+
+/// Parse a git config blob and return the `[remote "origin"] url` value,
+/// or nil if not present. Tolerant of whitespace and section ordering;
+/// understands both quoted and unquoted subsection headers
+/// (`[remote "origin"]` vs `[remote.origin]`).
+public func parseGitOriginURL(gitConfig: String) -> String? {
+    var inOriginSection = false
+    for raw in gitConfig.split(separator: "\n", omittingEmptySubsequences: false) {
+        var line = String(raw)
+        if let hash = line.firstIndex(where: { $0 == "#" || $0 == ";" }) {
+            line = String(line[..<hash])
+        }
+        line = line.trimmingCharacters(in: .whitespaces)
+        if line.isEmpty { continue }
+        if line.hasPrefix("[") {
+            inOriginSection =
+                line == "[remote \"origin\"]"
+                || line == "[remote.origin]"
+            continue
+        }
+        guard inOriginSection else { continue }
+        if let eq = line.firstIndex(of: "=") {
+            let key = line[..<eq].trimmingCharacters(in: .whitespaces).lowercased()
+            if key == "url" {
+                let value = line[line.index(after: eq)...]
+                    .trimmingCharacters(in: .whitespaces)
+                return value.isEmpty ? nil : value
+            }
+        }
+    }
+    return nil
+}

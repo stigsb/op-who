@@ -238,6 +238,18 @@ public class OnePasswordWatcher {
             let cwd = measure("bestCWD") { ProcessTree.bestCWD(chain: foldedChain) }
                 .map(ProcessTree.tidyPath)
 
+            // Detect Claude Code background plugin/marketplace updates: a `git`
+            // trigger whose own CWD lives under ~/.claude/plugins/. We use the
+            // trigger's literal CWD (not bestCWD) because the surrounding chain
+            // may have a wider CWD that escapes the plugins tree.
+            let pluginUpdate: ClaudePluginUpdate? = {
+                guard triggerNode.name == "git" else { return nil }
+                let triggerCWD = ProcessTree.processCWD(pid: triggerPID)
+                return measure("claudePluginUpdate") {
+                    claudePluginUpdate(forCWD: triggerCWD)
+                }
+            }()
+
             // For cmux, pull the workspace / tab identifiers from the trigger's
             // env block AND ask cmux itself for the user-facing workspace name
             // and tab title — those are user-renameable and the env-IDs are not.
@@ -278,7 +290,8 @@ public class OnePasswordWatcher {
                 cmuxWorkspaceID: cmuxWorkspaceID,
                 cmuxTabID: cmuxTabID,
                 cmuxSurface: cmuxSurface,
-                startTime: entryStartTime
+                startTime: entryStartTime,
+                pluginUpdate: pluginUpdate
             )
 
             let kind = makeRequestSummary(
@@ -287,7 +300,8 @@ public class OnePasswordWatcher {
                 tabTitle: tabTitle,
                 claudeSession: claudeSession,
                 terminalBundleID: result.terminalBundleID,
-                cwd: cwd
+                cwd: cwd,
+                pluginUpdate: pluginUpdate
             ).kind
 
             candidates.append(TriggerCandidate(
@@ -478,6 +492,9 @@ func jsonDump(entries: [OverlayPanel.ProcessEntry]) -> String {
             if let cmd = ctx.lastRelevantCommand { c["lastRelevantCommand"] = cmd }
             dict["claudeContext"] = c
         }
+        if let pu = entry.pluginUpdate {
+            dict["pluginUpdate"] = ["remoteURL": pu.remoteURL]
+        }
         if let ws = entry.cmuxWorkspaceID { dict["cmuxWorkspaceID"] = ws }
         if let tab = entry.cmuxTabID { dict["cmuxTabID"] = tab }
         if let s = entry.cmuxSurface {
@@ -496,7 +513,8 @@ func jsonDump(entries: [OverlayPanel.ProcessEntry]) -> String {
             tabTitle: entry.tabTitle,
             claudeSession: entry.claudeSession,
             terminalBundleID: entry.terminalBundleID,
-            cwd: entry.cwd
+            cwd: entry.cwd,
+            pluginUpdate: entry.pluginUpdate
         )
         var s: [String: Any] = [
             "kind": summary.kind.rawValue,

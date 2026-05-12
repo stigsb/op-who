@@ -137,4 +137,80 @@ struct ClaudeContextTests {
         #expect(!isRelevantCommand("ls -la"))
         #expect(!isRelevantCommand("echo opacity"))
     }
+
+    @Test func parsesQuotedRemoteOriginURL() {
+        let cfg = """
+        [core]
+        \trepositoryformatversion = 0
+        [remote "origin"]
+        \turl = git@github.com:cloudflare/skills.git
+        \tfetch = +refs/heads/main:refs/remotes/origin/main
+        """
+        #expect(parseGitOriginURL(gitConfig: cfg) == "git@github.com:cloudflare/skills.git")
+    }
+
+    @Test func parsesHTTPSRemoteOriginURL() {
+        let cfg = """
+        [remote "origin"]
+        \turl = https://github.com/tomasz-tomczyk/crit.git
+        """
+        #expect(parseGitOriginURL(gitConfig: cfg) == "https://github.com/tomasz-tomczyk/crit.git")
+    }
+
+    @Test func returnsNilWhenNoOriginRemote() {
+        let cfg = """
+        [core]
+        \trepositoryformatversion = 0
+        [remote "upstream"]
+        \turl = git@github.com:foo/bar.git
+        """
+        #expect(parseGitOriginURL(gitConfig: cfg) == nil)
+    }
+
+    @Test func ignoresCommentsAndOtherSections() {
+        let cfg = """
+        # comment
+        [branch "main"]
+        \tremote = origin
+        [remote "origin"]
+        \t; the real url
+        \turl = git@github.com:org/repo.git
+        """
+        #expect(parseGitOriginURL(gitConfig: cfg) == "git@github.com:org/repo.git")
+    }
+
+    @Test func pluginRepoRootFindsClosestGit() {
+        // Synthetic: cwd is two levels inside the marketplace repo. The
+        // repo root sits between cwd and the plugins base.
+        let base = "/Users/x/.claude/plugins"
+        let cwd = "\(base)/marketplaces/crit/skills/foo"
+        let gitConfigs: Set<String> = [
+            "\(base)/marketplaces/crit/.git/config",
+        ]
+        let root = pluginRepoRoot(
+            cwd: cwd, pluginsBase: base,
+            fileExists: { gitConfigs.contains($0) }
+        )
+        #expect(root == "\(base)/marketplaces/crit")
+    }
+
+    @Test func pluginRepoRootRejectsCWDOutsidePlugins() {
+        let base = "/Users/x/.claude/plugins"
+        let root = pluginRepoRoot(
+            cwd: "/Users/x/git/repo",
+            pluginsBase: base,
+            fileExists: { _ in true }
+        )
+        #expect(root == nil)
+    }
+
+    @Test func pluginRepoRootReturnsNilWhenNoGitFound() {
+        let base = "/Users/x/.claude/plugins"
+        let root = pluginRepoRoot(
+            cwd: "\(base)/marketplaces/crit/skills",
+            pluginsBase: base,
+            fileExists: { _ in false }
+        )
+        #expect(root == nil)
+    }
 }

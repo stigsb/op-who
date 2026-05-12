@@ -114,6 +114,23 @@ struct RequestSummaryTests {
         #expect(text.contains("id_rsa.pub"))
     }
 
+    @Test func pluginUpdateTitleOverridesNormalSummary() {
+        let chain = [node("git"), node("node"), node("claude")]
+        let update = ClaudePluginUpdate(remoteURL: "git@github.com:cloudflare/skills.git")
+        let s = makeRequestSummary(
+            chain: chain, tabTitle: nil,
+            claudeSession: "op-who",
+            terminalBundleID: "com.googlecode.iterm2",
+            cwd: "~/.claude/plugins/marketplaces/cloudflare",
+            pluginUpdate: update
+        )
+        #expect(s.kind == .ssh)
+        #expect(s.title == "Claude plugin update check from git@github.com:cloudflare/skills.git")
+        #expect(s.isWarning == false)
+        #expect(s.subtitle?.contains("iTerm") == true)
+        #expect(s.subtitle?.contains("~/.claude/plugins/marketplaces/cloudflare") == true)
+    }
+
     @Test func actorPrefersClaudeOverShell() {
         let chain = [node("op", verified: true), node("zsh"), node("claude")]
         let s = makeRequestSummary(
