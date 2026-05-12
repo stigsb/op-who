@@ -115,23 +115,38 @@ TODAY=$(date +%Y-%m-%d)
 HEADER="## [$NEW_VERSION] - $TODAY"
 
 if [[ -f "$CHANGELOG" ]]; then
-    # Insert after ## [Unreleased] if present, otherwise after the title
+    # Insert after ## [Unreleased] if present, otherwise after the title.
+    # Use awk instead of sed: BSD sed's `a\` block mangles multi-line text
+    # (especially lines that start with `-`).
+    TMP_CHANGELOG=$(mktemp)
+    # Pass HEADER/ENTRY via environment so embedded newlines survive (BSD awk
+    # refuses multi-line values with -v).
     if grep -q '## \[Unreleased\]' "$CHANGELOG"; then
-        sed -i '' "/## \[Unreleased\]/a\\
-\\
-${HEADER}\\
-\\
-${ENTRY}\\
-" "$CHANGELOG"
+        export HEADER ENTRY
+        awk '
+            { print }
+            /^## \[Unreleased\]/ && !inserted {
+                print ""
+                print ENVIRON["HEADER"]
+                print ""
+                print ENVIRON["ENTRY"]
+                inserted = 1
+            }
+        ' "$CHANGELOG" > "$TMP_CHANGELOG"
     else
-        # Insert after first heading
-        sed -i '' "1,/^# /s/^# .*/&\\
-\\
-${HEADER}\\
-\\
-${ENTRY}\\
-/" "$CHANGELOG"
+        export HEADER ENTRY
+        awk '
+            { print }
+            /^# / && !inserted {
+                print ""
+                print ENVIRON["HEADER"]
+                print ""
+                print ENVIRON["ENTRY"]
+                inserted = 1
+            }
+        ' "$CHANGELOG" > "$TMP_CHANGELOG"
     fi
+    mv "$TMP_CHANGELOG" "$CHANGELOG"
 else
     cat > "$CHANGELOG" << EOF
 # Changelog
