@@ -162,7 +162,14 @@ class OverlayPanel {
         ).kind
 
         // Three structured lead lines.
-        stack.addArrangedSubview(makeTerminalRow(entry))
+        let terminalRow = makeTerminalRow(entry)
+        stack.addArrangedSubview(terminalRow)
+        // Pin the terminal row to the stack's full width so its trailing
+        // shortcuts/timer cluster can right-align. Other rows keep their
+        // natural intrinsic width (default .leading alignment).
+        terminalRow.translatesAutoresizingMaskIntoConstraints = false
+        terminalRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
+        terminalRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
         stack.addArrangedSubview(makeDriverRow(entry))
         stack.addArrangedSubview(makeOperationRow(entry, kind: kind))
 
@@ -268,30 +275,48 @@ class OverlayPanel {
             row.addArrangedSubview(spacer)
         }
 
-        // Main text label — should hug content so the elapsed label gets pushed right.
-        // When a keyboard shortcut hint is present (e.g. iTerm's ⌘N), render
-        // it in a dimmer color in the same label so it visually reads as a
-        // hint rather than part of the tab name.
+        // Main title label: terminal prefix (dim) + user-visible title (bright).
+        // Stretches to fill remaining horizontal space so trailing shortcuts
+        // and timer can right-align.
         let label = makeLabel("", size: 13, weight: .semibold, color: .labelColor)
         let mainFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        let attr = NSMutableAttributedString(
-            string: parts.main,
-            attributes: [.font: mainFont, .foregroundColor: NSColor.labelColor]
-        )
-        if let shortcut = parts.shortcut {
+        let dim = NSColor.secondaryLabelColor
+        let bright = NSColor.labelColor
+        let attr = NSMutableAttributedString()
+        attr.append(NSAttributedString(
+            string: parts.prefix,
+            attributes: [.font: mainFont, .foregroundColor: dim]
+        ))
+        if !parts.title.isEmpty {
             attr.append(NSAttributedString(
-                string: " \(shortcut)",
-                attributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
-                    .foregroundColor: NSColor.systemBlue,
-                ]
+                string: parts.title,
+                attributes: [.font: mainFont, .foregroundColor: bright]
             ))
         }
         label.attributedStringValue = attr
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
+        // Low hugging = absorbs extra width (pushes trailing items right).
+        // Low compression resistance = truncates first when space is tight.
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         row.addArrangedSubview(label)
+
+        // Trailing shortcuts label: cmux's ⌘N/⌃M (from suffix) and/or iTerm's
+        // tab navigation hint (from shortcut). Right-aligned at content size.
+        let shortcutsText = composeShortcuts(suffix: parts.suffix, shortcut: parts.shortcut)
+        var shortcutsLabel: NSTextField? = nil
+        if !shortcutsText.isEmpty {
+            let sl = makeLabel(
+                shortcutsText,
+                size: 12, weight: .medium, color: dim, mono: true
+            )
+            sl.alignment = .right
+            sl.setContentHuggingPriority(.required, for: .horizontal)
+            sl.setContentCompressionResistancePriority(.required, for: .horizontal)
+            row.addArrangedSubview(sl)
+            shortcutsLabel = sl
+        }
 
         // Trailing elapsed-time label, only if we know the start time.
         if let start = entry.startTime {
@@ -302,8 +327,18 @@ class OverlayPanel {
                 mono: true
             )
             timeLabel.alignment = .right
+            // Reserve a fixed slot so growing values ("5s" → "10s" → "1m0s")
+            // fill the slot from the right rather than pushing the rest of
+            // the row around. 56pt comfortably fits "59m59s" in 12pt mono.
+            timeLabel.translatesAutoresizingMaskIntoConstraints = false
+            timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
             timeLabel.setContentHuggingPriority(.required, for: .horizontal)
             timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+            // Add visual breathing room between the shortcuts cluster and
+            // the timer so they read as separate concerns.
+            if let sl = shortcutsLabel {
+                row.setCustomSpacing(16, after: sl)
+            }
             row.addArrangedSubview(timeLabel)
             elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: start))
         }
@@ -311,60 +346,71 @@ class OverlayPanel {
         return row
     }
 
-    /// Two-part decomposition of row 1: the human-readable main text and an
-    /// optional keyboard-shortcut hint to render in a subdued color.
+    /// Decomposition of row 1 for styled rendering. The title is rendered
+    /// in a slightly brighter color than the surrounding `prefix` / `suffix`
+    /// so the user-visible workspace/tab name stands out without needing
+    /// quotes around it.
     struct TerminalRowParts: Equatable {
-        let main: String
+        /// Lead text rendered in the dim color (e.g. "cmux", "iTerm tab").
+        /// Trailing space is included when a title follows.
+        let prefix: String
+        /// User-visible title to highlight (e.g. "trusthere", "1. zsh — work").
+        /// Empty when no title is available.
+        let title: String
+        /// Trailing text after the title (e.g. " ⌘2 ⌃1"). May be empty.
+        let suffix: String
+        /// Legacy iTerm shortcut hint rendered in a subdued accent color
+        /// (e.g. "⌘3", "window 2 ⌘1"). nil when not applicable.
         let shortcut: String?
+
+        /// Backward-compatible flat-string composition used by tests/logging.
+        var main: String { prefix + title + suffix }
     }
 
-    /// Build the parts of row 1. The shortcut is split out so the UI can
-    /// render it in a different color from the rest of the row.
+    /// Build the parts of row 1.
     static func terminalRowParts(entry: ProcessEntry, termName: String) -> TerminalRowParts {
         if let s = entry.cmuxSurface {
+            // For cmux we deliberately skip the surface (tab) title: it's
+            // typically a duplicate of the workspace title (the CWD), and
+            // the user can navigate to the right tab with the ⌃N shortcut.
             let wsTitle = s.displayWorkspaceTitle
-            let surfaceTitle = CmuxHelper.looksGenericTitle(s.surfaceTitle) ? "" : s.surfaceTitle
             let wsKey = s.workspaceIndex > 0 ? " ⌘\(s.workspaceIndex)" : ""
             // ⌃N is only useful when the user has more than one tab to switch
-            // between — otherwise ⌃1 is trivial. We keep showing it when the
-            // tab count is unknown (0) so we don't lose info on stale state.
+            // between — otherwise ⌃1 is trivial. Keep showing it when the
+            // tab count is unknown (0) so stale state doesn't drop info.
             let showTabKey = s.tabIndex > 0 && s.workspaceTabCount != 1
             let tabKey = showTabKey ? " ⌃\(s.tabIndex)" : ""
 
-            // Collapse to one phrase when both labels resolve to the same
-            // string — repeating it tells the user nothing.
-            if !wsTitle.isEmpty && wsTitle == surfaceTitle {
-                let main = "\(termName) workspace+tab ‘\(wsTitle)’\(wsKey)\(tabKey)"
-                return TerminalRowParts(main: main, shortcut: nil)
+            if !wsTitle.isEmpty {
+                return TerminalRowParts(
+                    prefix: "\(termName) ",
+                    title: wsTitle,
+                    suffix: "\(wsKey)\(tabKey)",
+                    shortcut: nil
+                )
             }
-
-            let ws = wsTitle.isEmpty ? "" : "‘\(wsTitle)’"
-            let tab = surfaceTitle.isEmpty ? "" : "‘\(surfaceTitle)’"
-            let main: String
-            switch (ws.isEmpty, tab.isEmpty) {
-            case (false, false): main = "\(termName) workspace \(ws)\(wsKey), tab \(tab)\(tabKey)"
-            case (false, true):  main = "\(termName) workspace \(ws)\(wsKey)"
-            case (true, false):  main = "\(termName) tab \(tab)\(tabKey)"
-            case (true, true):   main = termName
+            if !wsKey.isEmpty || !tabKey.isEmpty {
+                return TerminalRowParts(
+                    prefix: termName, title: "", suffix: "\(wsKey)\(tabKey)", shortcut: nil
+                )
             }
-            return TerminalRowParts(main: main, shortcut: nil)
+            return TerminalRowParts(prefix: termName, title: "", suffix: "", shortcut: nil)
         }
         // For cmux without surface info, AX window title is unreliable
         // (returns "Item-0" placeholders rather than the visible workspace
         // name). Show only the terminal name.
         if isCmuxBundleID(entry.terminalBundleID) {
-            return TerminalRowParts(main: termName, shortcut: nil)
+            return TerminalRowParts(prefix: termName, title: "", suffix: "", shortcut: nil)
         }
         let title = entry.tabTitle?.trimmingCharacters(in: .whitespaces) ?? ""
         let shortcut = entry.tabShortcut?.trimmingCharacters(in: .whitespaces)
         let shortcutOrNil = (shortcut?.isEmpty ?? true) ? nil : shortcut
-        let main: String
         if !title.isEmpty {
-            main = "\(termName) tab ‘\(title)’"
-        } else {
-            main = termName
+            return TerminalRowParts(
+                prefix: "\(termName) tab ", title: title, suffix: "", shortcut: shortcutOrNil
+            )
         }
-        return TerminalRowParts(main: main, shortcut: shortcutOrNil)
+        return TerminalRowParts(prefix: termName, title: "", suffix: "", shortcut: shortcutOrNil)
     }
 
     /// Flat-string composition of row 1. Kept for callers (tests, logging)
@@ -560,6 +606,18 @@ class OverlayPanel {
         case .ssh:            return .systemBlue
         case .unknown:        return .labelColor
         }
+    }
+
+    /// Compose the shortcuts label content from `parts.suffix` (cmux's
+    /// " ⌘N ⌃M") and `parts.shortcut` (iTerm's "⌘3" or "window 2 ⌘1").
+    /// Both forms are joined with a space and stripped of leading whitespace.
+    private func composeShortcuts(suffix: String, shortcut: String?) -> String {
+        var s = suffix.trimmingCharacters(in: .whitespaces)
+        if let extra = shortcut, !extra.isEmpty {
+            if !s.isEmpty { s += " " }
+            s += extra
+        }
+        return s
     }
 
     /// Target max width for the wrapping prompt label: 40% of the main

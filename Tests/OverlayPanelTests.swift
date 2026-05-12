@@ -33,6 +33,8 @@ struct OverlayPanelTerminalRowTextTests {
     // MARK: - cmuxSurface present
 
     @Test func cmuxSurfaceWithNamedWorkspaceAndTab() {
+        // We intentionally drop the tab title for cmux — workspace name plus
+        // the ⌘N/⌃N shortcuts give the user enough to navigate.
         let s = CmuxSurfaceInfo(
             workspaceRef: "workspace:11",
             workspaceTitle: "trusthere",
@@ -44,7 +46,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘trusthere’, tab ‘main’")
+        #expect(text == "cmux trusthere")
     }
 
     @Test func cmuxSurfaceWithGenericWorkspaceTitleAndNoDescriptionOmitsWorkspace() {
@@ -79,7 +81,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘scratch experiments’, tab ‘main’")
+        #expect(text == "cmux scratch experiments")
     }
 
     @Test func cmuxSurfaceWithGenericSurfaceTitleOmitsTabClause() {
@@ -95,7 +97,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘trusthere’")
+        #expect(text == "cmux trusthere")
     }
 
     // MARK: - cmuxSurface absent (fallback path)
@@ -129,7 +131,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "1. zsh — work", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab ‘1. zsh — work’")
+        #expect(text == "iTerm tab 1. zsh — work")
     }
 
     @Test func noSurfaceAndNoTabTitleReturnsTermNameOnly() {
@@ -147,7 +149,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "mattermost", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab ‘mattermost’")
+        #expect(text == "iTerm tab mattermost")
     }
 
     @Test func tabTitlePlusShortcutShowsBoth() {
@@ -157,7 +159,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "mattermost", tabShortcut: "⌘3", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab ‘mattermost’ ⌘3")
+        #expect(text == "iTerm tab mattermost ⌘3")
     }
 
     @Test func tabTitlePlusMultiWindowShortcut() {
@@ -165,7 +167,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(tabTitle: "mattermost", tabShortcut: "window 2 ⌘1", terminalBundleID: "com.googlecode.iterm2"),
             termName: "iTerm"
         )
-        #expect(text == "iTerm tab ‘mattermost’ window 2 ⌘1")
+        #expect(text == "iTerm tab mattermost window 2 ⌘1")
     }
 
     @Test func shortcutOnlyRendersWithoutTabWrapping() {
@@ -213,26 +215,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘trusthere’ ⌘2, tab ‘main’ ⌃1")
-    }
-
-    @Test func cmuxSurfaceCollapsesWhenTitlesMatch() {
-        // The case from the screenshot: cmux renders the workspace title and
-        // surface title as the same string (the CWD). Don't repeat the user.
-        let s = CmuxSurfaceInfo(
-            workspaceRef: "workspace:0:1",
-            workspaceTitle: "/Users/stig/git/stigsb/op-who",
-            surfaceRef: "surface:25",
-            surfaceTitle: "/Users/stig/git/stigsb/op-who",
-            tty: "ttys021",
-            workspaceIndex: 2,
-            tabIndex: 1
-        )
-        let text = OverlayPanel.terminalRowText(
-            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
-            termName: "cmux"
-        )
-        #expect(text == "cmux workspace+tab ‘/Users/stig/git/stigsb/op-who’ ⌘2 ⌃1")
+        #expect(text == "cmux trusthere ⌘2 ⌃1")
     }
 
     @Test func cmuxSingleTabWorkspaceHidesTabShortcut() {
@@ -252,7 +235,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘trusthere’ ⌘2, tab ‘main’")
+        #expect(text == "cmux trusthere ⌘2")
     }
 
     @Test func cmuxMultipleTabsKeepTabShortcut() {
@@ -270,25 +253,7 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘trusthere’ ⌘2, tab ‘main’ ⌃1")
-    }
-
-    @Test func cmuxCollapsedFormSuppressesTabShortcutForSingleTab() {
-        let s = CmuxSurfaceInfo(
-            workspaceRef: "workspace:0:1",
-            workspaceTitle: "/Users/stig/git/stigsb/op-who",
-            surfaceRef: "surface:25",
-            surfaceTitle: "/Users/stig/git/stigsb/op-who",
-            tty: "ttys021",
-            workspaceIndex: 2,
-            tabIndex: 1,
-            workspaceTabCount: 1
-        )
-        let text = OverlayPanel.terminalRowText(
-            entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
-            termName: "cmux"
-        )
-        #expect(text == "cmux workspace+tab ‘/Users/stig/git/stigsb/op-who’ ⌘2")
+        #expect(text == "cmux trusthere ⌘2 ⌃1")
     }
 
     @Test func cmuxSurfaceShortcutOnlyWhenIndexPresent() {
@@ -306,6 +271,6 @@ struct OverlayPanelTerminalRowTextTests {
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
             termName: "cmux"
         )
-        #expect(text == "cmux workspace ‘trusthere’, tab ‘main’ ⌃3")
+        #expect(text == "cmux trusthere ⌃3")
     }
 }
