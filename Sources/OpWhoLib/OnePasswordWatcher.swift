@@ -73,7 +73,7 @@ public class OnePasswordWatcher {
     private func attach(to app: NSRunningApplication) {
         let pid = app.processIdentifier
 
-        guard ProcessTree.isRunningProcessSignedByTrustedPublisher(pid: pid) else {
+        guard ProcessTree.isRunningProcessSignedByOnePassword(pid: pid) else {
             Log.watcher.error("Refusing to attach: 1Password app (pid \(pid, privacy: .public)) failed code signature verification")
             return
         }
@@ -327,7 +327,8 @@ public class OnePasswordWatcher {
                 pluginUpdate: pluginUpdate,
                 summary: summary,
                 matchedRuleID: matchResult?.rule.id,
-                matchedRuleName: matchResult?.rule.name
+                matchedRuleName: matchResult?.rule.name,
+                matchedBuiltInID: matchResult?.rule.builtInID
             )
 
             candidates.append(TriggerCandidate(
@@ -389,7 +390,8 @@ public class OnePasswordWatcher {
                 kindRaw: chosen.entry.summary.kind.rawValue,
                 isWarning: chosen.entry.summary.isWarning,
                 matchedRuleID: chosen.entry.matchedRuleID,
-                matchedRuleName: chosen.entry.matchedRuleName
+                matchedRuleName: chosen.entry.matchedRuleName,
+                matchedBuiltInID: chosen.entry.matchedBuiltInID
             )
             store.record(recent)
         }

@@ -523,6 +523,59 @@ struct StoresTests {
         #expect(reloaded.requests.map { $0.title } == ["req-7", "req-8", "req-9"])
     }
 
+    /// Built-in `RequestRule` UUIDs regenerate every process run, so a
+    /// `matchedRuleID` persisted to recent-requests.json in one session
+    /// won't match any rule in the next session. The stable `builtInID`
+    /// slug survives the round-trip and resolves via
+    /// `RequestRule.builtIn(id:)`.
+    @Test func recentRequestMatchedBuiltInIDSurvivesPersistence() {
+        let url = tempDir().appendingPathComponent("recent-builtin.json")
+        let store = RecentRequestsStore(capacity: 5, fileURL: url)
+        let builtIn = RequestRule.builtIns.first(where: { $0.builtInID == "op-read-uri" })!
+        let request = RecentRequest(
+            chainNames: ["op"], triggerArgv: ["op", "read", "op://X/Y"],
+            cwd: nil, triggerCwd: nil, binaryVerified: true,
+            claudeSession: nil, terminalBundleID: nil, tabTitle: nil,
+            pluginRemoteURL: nil,
+            title: "wants to read op://X/Y", subtitle: nil,
+            kindRaw: "onePasswordCLI", isWarning: false,
+            matchedRuleID: builtIn.id,
+            matchedRuleName: builtIn.name,
+            matchedBuiltInID: builtIn.builtInID
+        )
+        store.record(request)
+
+        let reloaded = RecentRequestsStore(capacity: 5, fileURL: url)
+        let loaded = reloaded.requests.first!
+        // UUID does NOT survive a process restart for built-ins, so we
+        // only assert the stable slug survived.
+        #expect(loaded.matchedBuiltInID == "op-read-uri")
+        #expect(RequestRule.builtIn(id: loaded.matchedBuiltInID!)?.template == builtIn.template)
+    }
+
+    /// recent-requests.json files written by v0.5.2 (before
+    /// `matchedBuiltInID` existed) must still decode. The synthesized
+    /// Codable treats the missing optional as nil.
+    @Test func recentRequestDecodesWithoutMatchedBuiltInID() throws {
+        let legacy = """
+        [{
+          "id": "00000000-0000-0000-0000-000000000001",
+          "timestamp": "2026-01-01T00:00:00Z",
+          "chainNames": ["op"],
+          "triggerArgv": ["op", "read"],
+          "binaryVerified": true,
+          "title": "legacy",
+          "kindRaw": "onePasswordCLI",
+          "isWarning": false
+        }]
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode([RecentRequest].self, from: legacy)
+        #expect(decoded.count == 1)
+        #expect(decoded.first?.matchedBuiltInID == nil)
+    }
+
     private func sampleRequest(title: String) -> RecentRequest {
         RecentRequest(
             chainNames: ["op"], triggerArgv: ["op", "read", "op://X/Y"],
@@ -530,7 +583,8 @@ struct StoresTests {
             claudeSession: nil, terminalBundleID: nil, tabTitle: nil,
             pluginRemoteURL: nil,
             title: title, subtitle: nil, kindRaw: "onePasswordCLI",
-            isWarning: false, matchedRuleID: nil, matchedRuleName: nil
+            isWarning: false, matchedRuleID: nil, matchedRuleName: nil,
+            matchedBuiltInID: nil
         )
     }
 }

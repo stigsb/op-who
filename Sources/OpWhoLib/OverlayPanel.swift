@@ -36,6 +36,12 @@ class OverlayPanel {
         /// the matched-rule name in the recent-requests ring buffer.
         let matchedRuleID: UUID?
         let matchedRuleName: String?
+        /// Stable, release-spanning identifier of the matched rule when
+        /// the match was a built-in; nil for user-authored rules. Stored
+        /// alongside `matchedRuleID` so `RecentRequest` can look up the
+        /// matched built-in after a restart (UUIDs are regenerated each
+        /// process run).
+        let matchedBuiltInID: String?
     }
 
     private var panel: NSPanel?

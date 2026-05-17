@@ -428,10 +428,23 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         }
 
         // Inherit template/kind/etc from whichever rule matched the
-        // recent request — could be a user rule or a built-in.
-        let inherited = recent.matchedRuleID.flatMap { id in
-            store.allRules.first(where: { $0.id == id })
-        }
+        // recent request. Built-in rule UUIDs regenerate every process
+        // run, so a persisted `matchedRuleID` from a previous session
+        // won't match any built-in here — look the built-in up by its
+        // stable `builtInID` first, then fall back to UUID for matches
+        // that happened within this process run (e.g. against user rules
+        // recorded earlier in the same session).
+        let inherited: RequestRule? = {
+            if let bid = recent.matchedBuiltInID,
+               let rule = RequestRule.builtIn(id: bid) {
+                return rule
+            }
+            if let id = recent.matchedRuleID,
+               let rule = store.allRules.first(where: { $0.id == id }) {
+                return rule
+            }
+            return nil
+        }()
         let template = inherited?.template ?? "triggered 1Password (via ‘{process}’)"
         let replacesActor = inherited?.replacesActor ?? false
         let kind = inherited?.kind ?? RequestKind(rawValue: recent.kindRaw) ?? .unknown

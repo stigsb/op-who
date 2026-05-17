@@ -694,8 +694,10 @@ public enum OpWhoConfig {
     /// the store as `userRules + (builtIns − disabledBuiltInIDs)`.
     public static var rules: [RequestRule] = RequestRule.builtIns
     /// Apple Team IDs (subject.OU) that ProcessTree's signing-cert checks
-    /// treat as trusted — used both to mark trigger binaries verified
-    /// (for the matcher's `binaryVerified` predicate) and to gate the
-    /// AX-observer attach to the 1Password app.
+    /// treat as trusted for the matcher's `binaryVerified` predicate on
+    /// trigger binaries (currently only the `op` CLI). Does **not** govern
+    /// the AX-observer attach to the 1Password app — that is pinned to
+    /// 1Password's own Team ID inside `ProcessTree` so a user-added
+    /// publisher cannot let a non-1Password app pass as 1Password.
     public static var trustedTeamIDs: [String] = TrustedPublisher.defaults.map { $0.teamID }
 }

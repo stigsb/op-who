@@ -172,8 +172,18 @@ public struct RecentRequest: Codable, Identifiable, Equatable {
     public var subtitle: String?
     public var kindRaw: String
     public var isWarning: Bool
+    /// Per-process UUID of the rule that matched. Stable within one
+    /// process run but not across restarts (built-in `RequestRule` UUIDs
+    /// are regenerated every launch). For built-ins, persistence consumers
+    /// should prefer `matchedBuiltInID`.
     public var matchedRuleID: UUID?
     public var matchedRuleName: String?
+    /// Stable, release-spanning identifier of the matched rule when the
+    /// match was a built-in. Nil when the match was a user-authored rule.
+    /// Survives app restarts, so `ruleFromRecent` can look the built-in
+    /// up via `RequestRule.builtIn(id:)` instead of relying on the
+    /// regenerated UUID.
+    public var matchedBuiltInID: String?
 
     public init(
         id: UUID = UUID(),
@@ -192,7 +202,8 @@ public struct RecentRequest: Codable, Identifiable, Equatable {
         kindRaw: String,
         isWarning: Bool,
         matchedRuleID: UUID?,
-        matchedRuleName: String?
+        matchedRuleName: String?,
+        matchedBuiltInID: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -211,6 +222,7 @@ public struct RecentRequest: Codable, Identifiable, Equatable {
         self.isWarning = isWarning
         self.matchedRuleID = matchedRuleID
         self.matchedRuleName = matchedRuleName
+        self.matchedBuiltInID = matchedBuiltInID
     }
 }
 

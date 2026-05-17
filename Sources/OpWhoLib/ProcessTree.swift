@@ -42,12 +42,33 @@ public struct ChainResult {
 
 public enum ProcessTree {
 
+    /// 1Password's Apple Team ID. Hardcoded — distinct from the
+    /// user-editable trusted-publisher list, which only governs how
+    /// trigger binaries (e.g. `op` clones) are classified. The AX-observer
+    /// attach to the 1Password app process always uses this constant so a
+    /// user-added publisher can never grant a non-1Password app permission
+    /// to act as 1Password.
+    private static let onePasswordTeamID = "2BUA8C4S2C"
+
+    /// Validate that a team ID looks like an Apple Developer Team ID:
+    /// 10 ASCII alphanumeric characters. Filters out empties, whitespace,
+    /// or anything containing characters that would break the
+    /// `SecRequirement` string we build below.
+    private static func isValidTeamID(_ s: String) -> Bool {
+        guard s.count == 10 else { return false }
+        return s.unicodeScalars.allSatisfy { scalar in
+            (scalar >= "0" && scalar <= "9")
+                || (scalar >= "A" && scalar <= "Z")
+                || (scalar >= "a" && scalar <= "z")
+        }
+    }
+
     /// Build a `SecRequirement` text that matches any binary signed by
     /// one of the team IDs the user has marked trusted. Returns nil when
     /// the list is empty — verifying anything would be meaningless, so
     /// callers treat nil as "no binary is verified".
     private static func trustedPublisherRequirementText() -> String? {
-        let teamIDs = OpWhoConfig.trustedTeamIDs.filter { !$0.isEmpty }
+        let teamIDs = OpWhoConfig.trustedTeamIDs.filter(isValidTeamID)
         guard !teamIDs.isEmpty else { return nil }
         // OR-chain the per-team-ID requirements so a binary signed by ANY
         // configured publisher checks out. `anchor apple generic` ensures
@@ -58,6 +79,13 @@ public enum ProcessTree {
         }
         return clauses.joined(separator: " or ")
     }
+
+    /// `SecRequirement` text that matches only binaries signed by
+    /// 1Password's own Team ID. Used by `OnePasswordWatcher` to gate the
+    /// AX-observer attach; deliberately ignores `OpWhoConfig.trustedTeamIDs`
+    /// so user-added publishers cannot pass this guard.
+    private static let onePasswordRequirementText: String =
+        "anchor apple generic and certificate leaf[subject.OU] = \"\(onePasswordTeamID)\""
 
     private static let terminalBundleIDs: Set<String> = [
         "com.apple.Terminal",
@@ -452,14 +480,26 @@ public enum ProcessTree {
         return argv
     }
 
+    /// Check if a running process (by PID) is signed by 1Password's own
+    /// Apple Team ID. Used to gate AX-observer attach to the 1Password
+    /// app — pinned to 1Password specifically so a user-added trusted
+    /// publisher (intended only for trigger-binary classification)
+    /// cannot grant a non-1Password app the right to act as 1Password.
+    public static func isRunningProcessSignedByOnePassword(pid: pid_t) -> Bool {
+        return isRunningProcess(pid: pid, requirementText: onePasswordRequirementText)
+    }
+
     /// Check if a running process (by PID) is signed by any of the team
     /// IDs the user has marked trusted in `OpWhoConfig.trustedTeamIDs`.
-    /// Used to gate AX-observer attach to the 1Password app — if the
-    /// trusted list ever ends up empty the attach refuses, which is the
-    /// safe failure mode (worse to attach to a counterfeit 1Password
-    /// than to be inert).
+    /// Reserved for the matcher's `binaryVerified` predicate on trigger
+    /// binaries; do **not** use this to authenticate the 1Password app
+    /// itself (use `isRunningProcessSignedByOnePassword` for that).
     public static func isRunningProcessSignedByTrustedPublisher(pid: pid_t) -> Bool {
         guard let reqText = trustedPublisherRequirementText() else { return false }
+        return isRunningProcess(pid: pid, requirementText: reqText)
+    }
+
+    private static func isRunningProcess(pid: pid_t, requirementText: String) -> Bool {
         let attributes = [kSecGuestAttributePid: pid] as CFDictionary
         var code: SecCode?
         guard SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code) == errSecSuccess,
@@ -468,7 +508,7 @@ public enum ProcessTree {
         }
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(
-            reqText as CFString,
+            requirementText as CFString,
             SecCSFlags(),
             &requirement
         ) == errSecSuccess,

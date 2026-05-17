@@ -270,13 +270,16 @@ final class PublishersPane: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private func removeSelected() {
         guard let index = selectedIndex else { return }
 
-        // Removing the last publisher disables AX-attach to 1Password, so
-        // op-who stops working entirely. Confirm — and tell them how to
-        // recover via Reset to Default.
+        // Removing the last publisher means trigger binaries (today only
+        // `op`) can no longer be classified as verified — rules gated on
+        // `binaryVerified: true` will stop matching and approvals will
+        // fall through to the "unverified op" warning rule. Detection of
+        // 1Password's own dialogs is unaffected (the AX-attach is pinned
+        // to 1Password's Team ID, not the user-editable list).
         if store.publishers.count == 1 {
             let alert = NSAlert()
             alert.messageText = "Remove the last trusted publisher?"
-            alert.informativeText = "With no trusted publishers, op-who will refuse to attach to 1Password and stop detecting approval dialogs. Use Reset to Default to recover."
+            alert.informativeText = "With no trusted publishers, op-who can no longer mark trigger binaries (such as the 1Password CLI) as verified. Rules that require a verified binary will stop matching. Use Reset to Default to recover."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Remove")
             alert.addButton(withTitle: "Cancel")
