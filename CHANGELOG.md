@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-18
+
+- Added: Configurable rule engine — user-editable rules with matchers and templates override or extend the built-in detectors.
+- Added: Settings window (Cmd-,) — enable/disable built-in rules, clone them, or build new rules from recent triggered requests.
+- Added: Free-form comment field on rules for personal notes.
+- Changed: "Run on startup" moved from the menu-bar menu into Settings → Options.
+- Changed: Menu-bar menu pared down to Accessibility status, Settings…, and "Quit op-who" (now self-identified).
+- Fixed: Stray off-state glyphs no longer appear next to non-toggleable menu items.
+- Fixed: Process argv buffer now sized to ARG_MAX instead of a 4 KB cap, so very long command lines are no longer truncated.
+
 ## [0.5.2] - 2026-05-12
 
 - Changed: Menu-bar icon is now a "?" in a double-circle, paired visually with the 1Password app icon.
