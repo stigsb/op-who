@@ -57,9 +57,13 @@ final class GeneralPane: NSObject {
             subhead.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -pad),
             startupCheckbox.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: pad),
 
-            header.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+            header.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
             subhead.topAnchor.constraint(equalTo: header.bottomAnchor, constant: spacing),
             startupCheckbox.topAnchor.constraint(equalTo: subhead.bottomAnchor, constant: spacing * 2),
+            // Bottom anchor closes the container's intrinsic content size.
+            // Without it, the surrounding NSStackView reads height 0 and
+            // packs the next section right on top of this one.
+            startupCheckbox.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
         ])
         return container
     }

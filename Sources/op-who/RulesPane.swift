@@ -174,22 +174,18 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         bar.orientation = .horizontal
         bar.spacing = 8
 
-        // macOS-idiomatic "+ with options": NSPopUpButton in pull-down
-        // mode. The first item is an icon-only placeholder that NSPopUp
-        // uses as the button face; subsequent items are the actions.
-        let plusButton = NSPopUpButton(frame: .zero, pullsDown: true)
-        let face = NSMenuItem()
-        face.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add rule")
-        plusButton.menu?.addItem(face)
-        let blank = NSMenuItem(title: "Blank Rule", action: #selector(addBlank(_:)), keyEquivalent: "")
-        blank.target = self
-        plusButton.menu?.addItem(blank)
-        let fromRecent = NSMenuItem(title: "From Recent Request…", action: #selector(addFromRecent(_:)), keyEquivalent: "")
-        fromRecent.target = self
-        plusButton.menu?.addItem(fromRecent)
-        let clone = NSMenuItem(title: "Clone Selected Rule", action: #selector(addClone(_:)), keyEquivalent: "")
-        clone.target = self
-        plusButton.menu?.addItem(clone)
+        // "+ with options": a plain NSButton that pops up a menu on
+        // click. Tried NSPopUpButton in pull-down mode first but it
+        // renders the first item's title (or "NSMenuItem" if empty)
+        // alongside the chevron, which clutters a button that should
+        // just read as "+". popUp(positioning:at:in:) gives the same
+        // affordance with a cleaner face.
+        let plusButton = NSButton(
+            image: NSImage(systemSymbolName: "plus", accessibilityDescription: "Add rule")!,
+            target: self,
+            action: #selector(showAddMenu(_:))
+        )
+        plusButton.bezelStyle = .smallSquare
         plusButton.setContentHuggingPriority(.required, for: .horizontal)
         bar.addArrangedSubview(plusButton)
 
@@ -408,6 +404,25 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     // MARK: - Actions
+
+    @objc private func showAddMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        let blank = NSMenuItem(title: "Blank Rule", action: #selector(addBlank(_:)), keyEquivalent: "")
+        blank.target = self
+        menu.addItem(blank)
+        let fromRecent = NSMenuItem(title: "From Recent Request…", action: #selector(addFromRecent(_:)), keyEquivalent: "")
+        fromRecent.target = self
+        fromRecent.isEnabled = !recentStore.requests.isEmpty
+        menu.addItem(fromRecent)
+        let clone = NSMenuItem(title: "Clone Selected Rule", action: #selector(addClone(_:)), keyEquivalent: "")
+        clone.target = self
+        clone.isEnabled = (selectedRuleID != nil)
+        menu.addItem(clone)
+        // Show the menu just below the button, matching the way
+        // pull-down toolbar pickers anchor in Finder / Mail.
+        let origin = NSPoint(x: 0, y: sender.bounds.maxY + 2)
+        menu.popUp(positioning: nil, at: origin, in: sender)
+    }
 
     @objc private func addBlank(_ sender: Any?) {
         insertUserRule(emptyTemplateRule())
