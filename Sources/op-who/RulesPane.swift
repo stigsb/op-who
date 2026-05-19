@@ -180,7 +180,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         // alongside the chevron, which clutters a button that should
         // just read as "+". popUp(positioning:at:in:) gives the same
         // affordance with a cleaner face.
-        let plusButton = NSButton(
+        let plusButton = ToolbarButton(
             image: NSImage(systemSymbolName: "plus", accessibilityDescription: "Add rule")!,
             target: self,
             action: #selector(showAddMenu(_:))
@@ -189,7 +189,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         plusButton.setContentHuggingPriority(.required, for: .horizontal)
         bar.addArrangedSubview(plusButton)
 
-        let removeButton = NSButton(
+        let removeButton = ToolbarButton(
             image: NSImage(systemSymbolName: "minus", accessibilityDescription: "Remove selected user rule")!,
             target: self,
             action: #selector(removeSelected(_:))
@@ -265,6 +265,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
         commentView.delegate = self
         commentView.isRichText = false
+        commentView.allowsUndo = true
         commentView.font = NSFont.systemFont(ofSize: 12)
         commentView.textContainerInset = NSSize(width: 4, height: 4)
         commentScroll.borderType = .bezelBorder
@@ -835,5 +836,22 @@ private final class EnabledCheckboxCell: NSTableCellView {
     @objc private func toggle(_ sender: NSButton) {
         guard let id = ruleID else { return }
         onToggle?(id, sender.state == .on)
+    }
+}
+
+// MARK: - Toolbar-style button
+
+/// Plain NSButton that pins its cursor to `.arrow`. The +/-/move buttons in
+/// the rules pane are NSButtons with `.smallSquare` bezels hosting SF
+/// Symbol images — under some macOS versions AppKit lets a horizontal
+/// resize cursor bleed in from a neighbouring control (likely the
+/// adjacent NSSegmentedControl's separator hit zone) when hovering the
+/// short "minus" glyph. Reinstalling an explicit arrow cursor rect for
+/// the button's full bounds keeps the pointer behaviour consistent with
+/// every other button in the window.
+private final class ToolbarButton: NSButton {
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .arrow)
     }
 }

@@ -45,7 +45,32 @@ final class ConfigWindowController: NSWindowController {
     /// LSUIElement menu-bar app with no File menu), so Cmd-W isn't routed to
     /// `performClose:` automatically. Intercept it here so it closes the
     /// window the way users expect.
+    ///
+    /// Also vends a field editor with `allowsUndo = true`. NSTextField
+    /// doesn't manage its own editing — it borrows the window's shared
+    /// field editor (an NSTextView). The default field editor has
+    /// `allowsUndo = false`, which means Cmd-Z does nothing inside a text
+    /// field even after the Edit menu is wired up. Returning a
+    /// purpose-built field editor with undo enabled is the standard way
+    /// to flip that behavior on for every text field in the window.
     private final class ConfigWindow: NSWindow {
+        private lazy var undoEnabledFieldEditor: NSTextView = {
+            let tv = NSTextView()
+            tv.isFieldEditor = true
+            tv.allowsUndo = true
+            return tv
+        }()
+
+        override func fieldEditor(_ createFlag: Bool, for object: Any?) -> NSText? {
+            // NSTextView clients (e.g. the comment editor in RulesPane)
+            // bring their own editor — defer to AppKit for those so we
+            // don't accidentally hijack their text storage.
+            if object is NSTextView {
+                return super.fieldEditor(createFlag, for: object)
+            }
+            return undoEnabledFieldEditor
+        }
+
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
                event.charactersIgnoringModifiers == "w" {

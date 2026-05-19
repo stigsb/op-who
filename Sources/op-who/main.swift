@@ -25,6 +25,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         let trusted = AXIsProcessTrustedWithOptions(options)
 
+        // LSUIElement apps don't get a main menu by default, which means
+        // NSTextField/NSTextView never see the Cmd-C/V/X/Z key equivalents
+        // (those are routed through the menu's responder chain, not the
+        // window). Install a minimal app menu + Edit menu so the Settings
+        // window's text fields support copy/paste/undo like normal AppKit
+        // controls. The menu bar only shows while our app is the active
+        // app (i.e. while Settings is in front), so this doesn't intrude
+        // when the user is working in other apps.
+        installMainMenu()
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = Self.menuBarIcon()
@@ -165,6 +175,96 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func quitAction(_ sender: Any?) {
         NSApp.terminate(sender)
+    }
+
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App menu — first item is conventionally the application menu,
+        // titled with the app name. Items here go via the responder chain
+        // up to NSApplication for things like terminate:.
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        let appName = ProcessInfo.processInfo.processName
+        appMenu.addItem(NSMenuItem(
+            title: "Hide \(appName)",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        ))
+        let hideOthers = NSMenuItem(
+            title: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthers)
+        appMenu.addItem(NSMenuItem(
+            title: "Show All",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        ))
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(
+            title: "Quit \(appName)",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        ))
+        appMenuItem.submenu = appMenu
+
+        // Edit menu — undo/redo/cut/copy/paste/select-all. Targets resolve
+        // through the first responder, so the field editor (or any
+        // NSTextView) picks them up while a text field is focused. The
+        // raw `Selector(("undo:"))` form is intentional: NSText defines
+        // cut/copy/paste/selectAll as @objc methods, but undo: and redo:
+        // are responder-chain conventions implemented by NSUndoManager
+        // clients (here, the field editor we hand back from
+        // ConfigWindow) — there's no symbol on NSResponder to point
+        // #selector at.
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(
+            title: "Undo",
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        ))
+        let redo = NSMenuItem(
+            title: "Redo",
+            action: Selector(("redo:")),
+            keyEquivalent: "Z"
+        )
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redo)
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(
+            title: "Cut",
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Copy",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Delete",
+            action: #selector(NSText.delete(_:)),
+            keyEquivalent: ""
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Select All",
+            action: #selector(NSResponder.selectAll(_:)),
+            keyEquivalent: "a"
+        ))
+        editMenuItem.submenu = editMenu
+
+        NSApp.mainMenu = mainMenu
     }
 
     @objc func openConfigure(_ sender: Any?) {
