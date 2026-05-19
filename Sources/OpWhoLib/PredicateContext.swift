@@ -18,6 +18,12 @@ public final class PredicateContext: NSObject {
 
     @objc public let triggerName: String
     @objc public let triggerArgv: [String]
+    /// First non-flag argv token after argv[0] (e.g. "push" for
+    /// `git -C /tmp push origin`). Computed via the same `parseSubcommand`
+    /// the engine used in its structured-matcher days so predicates can
+    /// say `subcommand IN {"push","fetch"}` instead of trying to
+    /// rebuild flag-skipping logic in NSPredicate syntax.
+    @objc public let subcommand: String?
     @objc public let chainNames: [String]
     @objc public let cwd: String?
     @objc public let triggerCwd: String?
@@ -33,6 +39,7 @@ public final class PredicateContext: NSObject {
     public init(_ ctx: MatchContext) {
         self.triggerName = ctx.triggerName
         self.triggerArgv = ctx.triggerArgv
+        self.subcommand = parseSubcommand(argv: ctx.triggerArgv)
         self.chainNames = ctx.chain.map(\.name)
         self.cwd = ctx.cwd
         self.triggerCwd = ctx.triggerCwd
@@ -53,6 +60,7 @@ public final class PredicateContext: NSObject {
     public static let exposedKeys: [String] = [
         "triggerName",
         "triggerArgv",
+        "subcommand",
         "chainNames",
         "cwd",
         "triggerCwd",

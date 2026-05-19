@@ -24,14 +24,14 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     // Detail form controls.
     private let nameField = NSTextField()
-    private let processNameField = NSTextField()
-    private let subcommandField = NSTextField()
-    private let argvContainsAllField = NSTextField()
-    private let triggerCwdPrefixField = NSTextField()
-    private let binaryVerifiedPopup = NSPopUpButton()
-    private let pluginUpdatePopup = NSPopUpButton()
-    private let regexSourcePopup = NSPopUpButton()
-    private let regexPatternField = NSTextField()
+    /// NSPredicate-format text view. Multi-line because real-world rule
+    /// predicates with IN-sets and AND-chains spill past one line fast.
+    private let predicateView = NSTextView()
+    private let predicateScroll = NSScrollView()
+    /// Inline error display under the predicate field. Shows the
+    /// NSPredicate parser's reason text when the current input fails to
+    /// parse; empty (and hidden) when the predicate is valid.
+    private let predicateError = NSTextField(labelWithString: "")
     private let templateField = NSTextField()
     private let commentView = NSTextView()
     private let commentScroll = NSScrollView()
@@ -44,14 +44,11 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     )
 
     /// Editable detail controls, gathered once so we can flip them all to
-    /// disabled (read-only) when a built-in is selected.
+    /// disabled (read-only) when a built-in is selected. The predicate
+    /// and comment text views aren't NSControls, so they're toggled
+    /// separately in `setEditable`.
     private var editableControls: [NSControl] {
-        [
-            nameField, processNameField, subcommandField, argvContainsAllField,
-            triggerCwdPrefixField, regexPatternField, templateField,
-            binaryVerifiedPopup, pluginUpdatePopup, regexSourcePopup,
-            kindPopup, replacesActorCheckbox, isWarningCheckbox,
-        ]
+        [nameField, templateField, kindPopup, replacesActorCheckbox, isWarningCheckbox]
     }
 
     private(set) lazy var view: NSView = makeContentView()
@@ -230,24 +227,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         grid.columnSpacing = 8
 
         configureField(nameField, placeholder: "Display name")
-        configureField(processNameField, placeholder: "comma-separated, e.g. op,ssh,git")
-        configureField(subcommandField, placeholder: "comma-separated, e.g. fetch,pull,push")
-        configureField(argvContainsAllField, placeholder: "comma-separated tokens that must all appear in argv")
-        configureField(triggerCwdPrefixField, placeholder: "e.g. ~/.claude/plugins/")
-        configureField(regexPatternField, placeholder: #"e.g. github\.com[:/](.+?)(?:\.git)?/?$ — capture groups become $1, $2, …"#)
-        configureField(templateField, placeholder: "Template — {process}, {subcommand}, {argv}, {cwd}, {op_uri}, {op_phrase}, {plugin_remote}, {repo}, {source}, {marketplace}, {argv[N]}, $0, $1, …")
-
-        binaryVerifiedPopup.addItems(withTitles: ["any", "verified", "unverified"])
-        binaryVerifiedPopup.target = self
-        binaryVerifiedPopup.action = #selector(detailChanged(_:))
-
-        pluginUpdatePopup.addItems(withTitles: ["any", "required", "must not be present"])
-        pluginUpdatePopup.target = self
-        pluginUpdatePopup.action = #selector(detailChanged(_:))
-
-        regexSourcePopup.addItems(withTitles: ["(none)"] + RegexCaptureSource.allCases.map { $0.rawValue })
-        regexSourcePopup.target = self
-        regexSourcePopup.action = #selector(detailChanged(_:))
+        configureField(templateField, placeholder: "Template — {process}, {subcommand}, {argv}, {cwd}, {op_uri}, {op_phrase}, {plugin_remote}, {repo}, {source}, {marketplace}, {argv[N]}")
 
         kindPopup.addItems(withTitles: [
             RequestKind.onePasswordCLI.rawValue,
@@ -263,31 +243,23 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         isWarningCheckbox.target = self
         isWarningCheckbox.action = #selector(detailChanged(_:))
 
-        commentView.delegate = self
-        commentView.isRichText = false
-        commentView.allowsUndo = true
-        commentView.font = NSFont.systemFont(ofSize: 12)
-        commentView.textContainerInset = NSSize(width: 4, height: 4)
-        commentScroll.borderType = .bezelBorder
-        commentScroll.hasVerticalScroller = true
-        commentScroll.documentView = commentView
-        commentScroll.translatesAutoresizingMaskIntoConstraints = false
-        commentScroll.heightAnchor.constraint(equalToConstant: 56).isActive = true
-        commentScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+        configurePredicateView()
+        configureCommentView()
+
+        predicateError.font = NSFont.systemFont(ofSize: 11)
+        predicateError.textColor = .systemRed
+        predicateError.lineBreakMode = .byWordWrapping
+        predicateError.maximumNumberOfLines = 3
+        predicateError.preferredMaxLayoutWidth = 560
+        predicateError.isHidden = true
 
         builtInNotice.font = NSFont.systemFont(ofSize: 11)
         builtInNotice.textColor = .secondaryLabelColor
         builtInNotice.isHidden = true
 
         grid.addRow(with: [label("Name"), nameField])
-        grid.addRow(with: [label("Process name"), processNameField])
-        grid.addRow(with: [label("Subcommand"), subcommandField])
-        grid.addRow(with: [label("argv contains all"), argvContainsAllField])
-        grid.addRow(with: [label("Trigger CWD prefix"), triggerCwdPrefixField])
-        grid.addRow(with: [label("Binary verified"), binaryVerifiedPopup])
-        grid.addRow(with: [label("Plugin update"), pluginUpdatePopup])
-        grid.addRow(with: [label("Regex source"), regexSourcePopup])
-        grid.addRow(with: [label("Regex pattern"), regexPatternField])
+        grid.addRow(with: [label("Predicate"), predicateScroll])
+        grid.addRow(with: [NSView(), predicateError])
         grid.addRow(with: [label("Template"), templateField])
         grid.addRow(with: [label("Comment"), commentScroll])
         grid.addRow(with: [label("Kind"), kindPopup])
@@ -309,6 +281,41 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         ])
         detailBox.contentView = content
         return detailBox
+    }
+
+    private func configurePredicateView() {
+        predicateView.delegate = self
+        predicateView.isRichText = false
+        predicateView.allowsUndo = true
+        predicateView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        predicateView.textContainerInset = NSSize(width: 4, height: 4)
+        // Disable AppKit's "smart" text features — they'd helpfully turn
+        // straight quotes into curly ones, which NSPredicate's parser
+        // then rejects.
+        predicateView.isAutomaticQuoteSubstitutionEnabled = false
+        predicateView.isAutomaticDashSubstitutionEnabled = false
+        predicateView.isAutomaticTextReplacementEnabled = false
+        predicateView.isAutomaticSpellingCorrectionEnabled = false
+        predicateScroll.borderType = .bezelBorder
+        predicateScroll.hasVerticalScroller = true
+        predicateScroll.documentView = predicateView
+        predicateScroll.translatesAutoresizingMaskIntoConstraints = false
+        predicateScroll.heightAnchor.constraint(equalToConstant: 72).isActive = true
+        predicateScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+    }
+
+    private func configureCommentView() {
+        commentView.delegate = self
+        commentView.isRichText = false
+        commentView.allowsUndo = true
+        commentView.font = NSFont.systemFont(ofSize: 12)
+        commentView.textContainerInset = NSSize(width: 4, height: 4)
+        commentScroll.borderType = .bezelBorder
+        commentScroll.hasVerticalScroller = true
+        commentScroll.documentView = commentView
+        commentScroll.translatesAutoresizingMaskIntoConstraints = false
+        commentScroll.heightAnchor.constraint(equalToConstant: 56).isActive = true
+        commentScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
     }
 
     private func configureField(_ field: NSTextField, placeholder: String) {
@@ -363,7 +370,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
                 cell.textField?.stringValue = rule.name
                 cell.textField?.textColor = rule.enabled ? .labelColor : .disabledControlTextColor
             case "when":
-                cell.textField?.stringValue = rule.matcher.displaySummary
+                cell.textField?.stringValue = rule.predicate
                 cell.textField?.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
                 cell.textField?.textColor = rule.enabled ? .labelColor : .disabledControlTextColor
             case "then":
@@ -463,7 +470,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         let clone = RequestRule(
             id: UUID(),
             name: "Copy of \(source.name)",
-            matcher: source.matcher,
+            predicate: source.predicate,
             template: source.template,
             replacesActor: source.replacesActor,
             kind: source.kind,
@@ -530,9 +537,22 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
               let idx = store.userRules.firstIndex(where: { $0.id == id }) else {
             return
         }
+        // Always update the inline error label, even when the predicate
+        // is invalid — we still persist the broken text so the user's
+        // in-progress edit survives a re-selection, but the engine will
+        // skip the rule until they fix it.
+        let predicateText = predicateView.string
+        if let parseError = PredicateParser.validate(predicateText) {
+            predicateError.stringValue = parseError.localizedDescription
+            predicateError.isHidden = false
+        } else {
+            predicateError.stringValue = ""
+            predicateError.isHidden = true
+        }
+
         var rule = store.userRules[idx]
         rule.name = nameField.stringValue
-        rule.matcher = currentMatcherFromForm()
+        rule.predicate = predicateText
         rule.template = templateField.stringValue
         rule.comment = commentView.string.isEmpty ? nil : commentView.string
         rule.replacesActor = (replacesActorCheckbox.state == .on)
@@ -582,7 +602,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private func emptyTemplateRule() -> RequestRule {
         RequestRule(
             name: "New rule",
-            matcher: RequestMatcher(),
+            predicate: "TRUEPREDICATE",
             template: "triggered 1Password (via ‘{process}’)",
             kind: .unknown,
             isWarning: false
@@ -592,32 +612,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private func ruleFromRecent(_ recent: RecentRequest) -> RequestRule {
         let process = recent.chainNames.first
         let sub = parseSubcommand(argv: recent.triggerArgv)
-        var matcher = RequestMatcher()
-        if let p = process, !p.isEmpty {
-            matcher.processName = [p]
-        }
-        if let s = sub {
-            matcher.subcommand = [s]
-        }
-        // Surface every non-flag argv token (other than argv[0] and the
-        // parsed subcommand) as a contains-all narrowing, and pre-fill
-        // the cwd prefix from whichever cwd the recent record captured.
-        // Both fields are visible in the source-request preview, so
-        // leaving them empty made the prefill look broken — the user
-        // can prune what they don't want to constrain on.
-        let argvTokens = nonFlagArgvTokens(argv: recent.triggerArgv, skipSubcommand: sub)
-        if !argvTokens.isEmpty {
-            matcher.argvContainsAll = argvTokens
-        }
-        if let cwd = recent.triggerCwd ?? recent.cwd, !cwd.isEmpty {
-            matcher.triggerCwdPrefix = cwd
-        }
-        if process == "op" {
-            matcher.binaryVerified = recent.binaryVerified
-        }
-        if recent.pluginRemoteURL != nil {
-            matcher.requiresPluginUpdate = true
-        }
+        let predicate = predicateFromRecent(recent, process: process, subcommand: sub)
 
         // Inherit template/kind/etc from whichever rule matched the
         // recent request. Built-in rule UUIDs regenerate every process
@@ -651,9 +646,47 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             label = "Custom rule"
         }
         return RequestRule(
-            name: label, matcher: matcher, template: template,
+            name: label, predicate: predicate, template: template,
             replacesActor: replacesActor, kind: kind, isWarning: isWarning
         )
+    }
+
+    /// Emit a starting NSPredicate string that matches the recent record's
+    /// trigger process, parsed subcommand, non-flag argv tokens, and
+    /// captured cwd. All the data the user can see in the source-request
+    /// preview ends up in the predicate so the prefill faithfully
+    /// represents what they picked — they can prune clauses they don't
+    /// want to constrain on before saving.
+    private func predicateFromRecent(_ recent: RecentRequest, process: String?, subcommand: String?) -> String {
+        var clauses: [String] = []
+        if let p = process, !p.isEmpty {
+            clauses.append(#"triggerName == "\#(escapeForPredicateString(p))""#)
+        }
+        if let s = subcommand {
+            clauses.append(#"subcommand == "\#(escapeForPredicateString(s))""#)
+        }
+        let argvTokens = nonFlagArgvTokens(argv: recent.triggerArgv, skipSubcommand: subcommand)
+        for token in argvTokens {
+            clauses.append(#"ANY triggerArgv == "\#(escapeForPredicateString(token))""#)
+        }
+        if let cwd = recent.triggerCwd ?? recent.cwd, !cwd.isEmpty {
+            clauses.append(#"triggerCwd BEGINSWITH "\#(escapeForPredicateString(cwd))""#)
+        }
+        if process == "op" {
+            clauses.append("binaryVerified == \(recent.binaryVerified ? "YES" : "NO")")
+        }
+        if recent.pluginRemoteURL != nil {
+            clauses.append("pluginUpdateAvailable == YES")
+        }
+        return clauses.isEmpty ? "TRUEPREDICATE" : clauses.joined(separator: " AND ")
+    }
+
+    /// Escape backslashes and double quotes so a runtime-built predicate
+    /// string survives NSPredicate's parser. `"` inside a `"…"` literal
+    /// would terminate the string early; `\` is the escape character.
+    private func escapeForPredicateString(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     /// Non-flag argv tokens after argv[0], with the parsed subcommand
@@ -717,32 +750,22 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             return
         }
         nameField.stringValue = rule.name
-        processNameField.stringValue = rule.matcher.processName?.joined(separator: ",") ?? ""
-        subcommandField.stringValue = rule.matcher.subcommand?.joined(separator: ",") ?? ""
-        argvContainsAllField.stringValue = rule.matcher.argvContainsAll?.joined(separator: ",") ?? ""
-        triggerCwdPrefixField.stringValue = rule.matcher.triggerCwdPrefix ?? ""
-        switch rule.matcher.binaryVerified {
-        case .none: binaryVerifiedPopup.selectItem(at: 0)
-        case .some(true): binaryVerifiedPopup.selectItem(at: 1)
-        case .some(false): binaryVerifiedPopup.selectItem(at: 2)
-        }
-        switch rule.matcher.requiresPluginUpdate {
-        case .none: pluginUpdatePopup.selectItem(at: 0)
-        case .some(true): pluginUpdatePopup.selectItem(at: 1)
-        case .some(false): pluginUpdatePopup.selectItem(at: 2)
-        }
-        if let r = rule.matcher.regex {
-            regexSourcePopup.selectItem(withTitle: r.source.rawValue)
-            regexPatternField.stringValue = r.pattern
-        } else {
-            regexSourcePopup.selectItem(at: 0)
-            regexPatternField.stringValue = ""
-        }
+        predicateView.string = rule.predicate
         templateField.stringValue = rule.template
         commentView.string = rule.comment ?? ""
         replacesActorCheckbox.state = rule.replacesActor ? .on : .off
         isWarningCheckbox.state = rule.isWarning ? .on : .off
         kindPopup.selectItem(withTitle: rule.kind.rawValue)
+
+        // Surface any parse error on the loaded predicate so the user
+        // sees what's wrong without having to type into the field first.
+        if let parseError = PredicateParser.validate(rule.predicate) {
+            predicateError.stringValue = parseError.localizedDescription
+            predicateError.isHidden = false
+        } else {
+            predicateError.stringValue = ""
+            predicateError.isHidden = true
+        }
 
         let isBuiltIn = (rule.builtInID != nil)
         setEditable(!isBuiltIn)
@@ -754,14 +777,9 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     private func clearDetail() {
         nameField.stringValue = ""
-        processNameField.stringValue = ""
-        subcommandField.stringValue = ""
-        argvContainsAllField.stringValue = ""
-        triggerCwdPrefixField.stringValue = ""
-        binaryVerifiedPopup.selectItem(at: 0)
-        pluginUpdatePopup.selectItem(at: 0)
-        regexSourcePopup.selectItem(at: 0)
-        regexPatternField.stringValue = ""
+        predicateView.string = ""
+        predicateError.stringValue = ""
+        predicateError.isHidden = true
         templateField.stringValue = ""
         commentView.string = ""
         replacesActorCheckbox.state = .off
@@ -775,53 +793,10 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         for control in editableControls {
             control.isEnabled = editable
         }
+        predicateView.isEditable = editable
+        predicateView.isSelectable = true // selectable even when read-only so users can copy
         commentView.isEditable = editable
-        commentView.isSelectable = true // selectable even when read-only so users can copy
-    }
-
-    private func currentMatcherFromForm() -> RequestMatcher {
-        let processName = parseCSV(processNameField.stringValue)
-        let subcommand = parseCSV(subcommandField.stringValue)
-        let argvContainsAll = parseCSV(argvContainsAllField.stringValue)
-        let triggerCwdPrefix = triggerCwdPrefixField.stringValue.trimmingCharacters(in: .whitespaces)
-        let binaryVerified: Bool? = {
-            switch binaryVerifiedPopup.indexOfSelectedItem {
-            case 1: return true
-            case 2: return false
-            default: return nil
-            }
-        }()
-        let pluginUpdate: Bool? = {
-            switch pluginUpdatePopup.indexOfSelectedItem {
-            case 1: return true
-            case 2: return false
-            default: return nil
-            }
-        }()
-        let regex: RegexCapture? = {
-            let idx = regexSourcePopup.indexOfSelectedItem
-            guard idx > 0, idx - 1 < RegexCaptureSource.allCases.count else { return nil }
-            let pattern = regexPatternField.stringValue.trimmingCharacters(in: .whitespaces)
-            guard !pattern.isEmpty else { return nil }
-            return RegexCapture(source: RegexCaptureSource.allCases[idx - 1], pattern: pattern)
-        }()
-        return RequestMatcher(
-            processName: processName,
-            subcommand: subcommand,
-            argvContainsAll: argvContainsAll,
-            triggerCwdPrefix: triggerCwdPrefix.isEmpty ? nil : triggerCwdPrefix,
-            binaryVerified: binaryVerified,
-            requiresPluginUpdate: pluginUpdate,
-            regex: regex
-        )
-    }
-
-    private func parseCSV(_ s: String) -> [String]? {
-        let items = s
-            .split(separator: ",", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        return items.isEmpty ? nil : items
+        commentView.isSelectable = true
     }
 
     private func reloadTable() {

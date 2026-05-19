@@ -26,131 +26,16 @@ private func ctx(
     )
 }
 
-@Suite("RequestMatcher")
-struct RequestMatcherTests {
+@Suite("Built-in predicates")
+struct BuiltInPredicateTests {
 
-    @Test func emptyMatcherMatchesEverything() {
-        let m = RequestMatcher()
-        #expect(m.matches(ctx(chain: [node("op", verified: true)])))
-        #expect(m.matches(ctx(chain: [])))
-        #expect(m.matches(ctx(chain: [node("anything")], argv: ["x", "y"])))
-    }
-
-    @Test func processNameAndOpVerifiedAreANDed() {
-        let m = RequestMatcher(processName: ["op"], binaryVerified: true)
-        #expect(m.matches(ctx(chain: [node("op", verified: true)])))
-        #expect(!m.matches(ctx(chain: [node("op", verified: false)])))
-        #expect(!m.matches(ctx(chain: [node("ssh", verified: true)])))
-    }
-
-    @Test func subcommandSkipsLeadingFlags() {
-        let m = RequestMatcher(processName: ["git"], subcommand: ["push"])
-        #expect(m.matches(ctx(
-            chain: [node("git")],
-            argv: ["git", "-C", "/tmp", "-c", "color.ui=false", "push", "origin"]
-        )))
-        #expect(!m.matches(ctx(
-            chain: [node("git")],
-            argv: ["git", "-C", "/tmp", "fetch"]
-        )))
-    }
-
-    @Test func argvContainsAllNeedsEveryToken() {
-        let m = RequestMatcher(argvContainsAll: ["sign", "git"])
-        #expect(m.matches(ctx(chain: [node("op-ssh-sign")], argv: ["op-ssh-sign", "-Y", "sign", "-n", "git"])))
-        #expect(!m.matches(ctx(chain: [node("op-ssh-sign")], argv: ["op-ssh-sign", "-Y", "sign", "-n", "ssh"])))
-    }
-
-    @Test func triggerCwdPrefixExpandsTilde() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let m = RequestMatcher(triggerCwdPrefix: "~/.claude/plugins/")
-        #expect(m.matches(ctx(chain: [node("git")], triggerCwd: home + "/.claude/plugins/foo")))
-        #expect(!m.matches(ctx(chain: [node("git")], triggerCwd: home + "/git/x")))
-    }
-
-    @Test func pluginUpdatePresenceFiltersWork() {
-        let yes = RequestMatcher(requiresPluginUpdate: true)
-        let no = RequestMatcher(requiresPluginUpdate: false)
-        let update = ClaudePluginUpdate(remoteURL: "git@github.com:foo/bar.git")
-        #expect(yes.matches(ctx(chain: [node("git")], pluginUpdate: update)))
-        #expect(!yes.matches(ctx(chain: [node("git")])))
-        #expect(no.matches(ctx(chain: [node("git")])))
-        #expect(!no.matches(ctx(chain: [node("git")], pluginUpdate: update)))
-    }
-
-    @Test func regexAgainstPluginRemoteIsPredicateAndCaptureSource() {
-        let m = RequestMatcher(
-            processName: ["git"],
-            regex: RegexCapture(source: .pluginRemote,
-                                pattern: #"github\.com[:/](.+?)(?:\.git)?$"#)
-        )
-        let match = ctx(
-            chain: [node("git")],
-            pluginUpdate: ClaudePluginUpdate(remoteURL: "git@github.com:foo/bar.git")
-        )
-        #expect(m.matches(match))
-        #expect(m.captures(in: match) == ["github.com:foo/bar.git", "foo/bar"])
-
-        // Same rule against a non-github remote — regex must not match,
-        // so the matcher returns false (even though processName is fine).
-        let miss = ctx(
-            chain: [node("git")],
-            pluginUpdate: ClaudePluginUpdate(remoteURL: "git@gitlab.com:foo/bar.git")
-        )
-        #expect(!m.matches(miss))
-        #expect(m.captures(in: miss).isEmpty)
-    }
-
-    @Test func regexSourceWithMissingFieldIsNoMatch() {
-        // .pluginRemote when no pluginUpdate is present → no source
-        // value → no match (regression test: must not crash, must not
-        // silently match against nil/empty).
-        let m = RequestMatcher(
-            regex: RegexCapture(source: .pluginRemote, pattern: ".*")
-        )
-        #expect(!m.matches(ctx(chain: [node("git")])))
-    }
-
-    @Test func regexAgainstArgvJoined() {
-        let m = RequestMatcher(
-            regex: RegexCapture(source: .argvJoined,
-                                pattern: #"--remote=([^ ]+)"#)
-        )
-        let c = ctx(
-            chain: [node("git")],
-            argv: ["git", "push", "--remote=origin", "--tags"]
-        )
-        #expect(m.matches(c))
-        #expect(m.captures(in: c)[1] == "origin")
-    }
-
-    @Test func invalidRegexPatternIsNoMatch() {
-        // Malformed pattern → matcher must fail closed, never throw.
-        let m = RequestMatcher(
-            regex: RegexCapture(source: .argvJoined, pattern: "(unbalanced")
-        )
-        #expect(!m.matches(ctx(chain: [node("git")], argv: ["git", "x"])))
-    }
-
-    @Test func decodesLegacyOpVerifiedJsonKey() {
-        // Pre-rename JSON used the key "opVerified". CodingKeys aliases it
-        // to the renamed `binaryVerified` field so older rules.json files
-        // keep working after upgrade.
-        let json = #"""
-        {"processName": ["op"], "opVerified": true}
-        """#.data(using: .utf8)!
-        let m = try! JSONDecoder().decode(RequestMatcher.self, from: json)
-        #expect(m.binaryVerified == true)
-        #expect(m.processName == ["op"])
-    }
-
-    @Test func displaySummaryIsReadable() {
-        let m = RequestMatcher(
-            processName: ["op"], subcommand: ["read"], binaryVerified: true
-        )
-        #expect(m.displaySummary.contains("op"))
-        #expect(m.displaySummary.contains("read"))
-        #expect(m.displaySummary.contains("verified"))
+    @Test func everyBuiltInPredicateParses() throws {
+        // First line of defence: any rewrite of the built-in ruleset
+        // must keep every predicate string parse-able. A regression
+        // here would otherwise only surface at engine evaluation time.
+        for rule in RequestRule.builtIns {
+            _ = try PredicateParser.parse(rule.predicate)
+        }
     }
 }
 
@@ -199,47 +84,6 @@ struct RenderTemplateTests {
     @Test func opPhrasePlaceholder() {
         let c = ctx(chain: [node("op", verified: false)], argv: ["op", "read", "op://X/Y"])
         #expect(renderTemplate("({op_phrase})", context: c) == "(read op://X/Y)")
-    }
-
-    @Test func dollarNResolvesCaptureGroups() {
-        let c = ctx(chain: [node("git")])
-        let caps = ["github.com:foo/bar.git", "foo/bar", "bar"]
-        #expect(renderTemplate("from github.com/$1 (repo $2)", context: c, captures: caps)
-                == "from github.com/foo/bar (repo bar)")
-    }
-
-    @Test func dollarZeroIsFullMatch() {
-        let c = ctx(chain: [node("git")])
-        let caps = ["whole match", "g1"]
-        #expect(renderTemplate("matched [$0]", context: c, captures: caps) == "matched [whole match]")
-    }
-
-    @Test func dollarOutOfBoundsCausesFallthrough() {
-        let c = ctx(chain: [node("git")])
-        #expect(renderTemplate("x=$1", context: c, captures: []) == nil)
-        #expect(renderTemplate("x=$3", context: c, captures: ["m", "a"]) == nil)
-    }
-
-    @Test func emptyCaptureCausesFallthrough() {
-        // Optional group that didn't participate in the match resolves
-        // to "" — same convention as empty {placeholder} → fall through.
-        let c = ctx(chain: [node("git")])
-        #expect(renderTemplate("x=$1", context: c, captures: ["m", ""]) == nil)
-    }
-
-    @Test func doubleDollarEscapes() {
-        let c = ctx(chain: [node("git")])
-        #expect(renderTemplate("cost $$5 (was $1)", context: c, captures: ["m", "3"])
-                == "cost $5 (was 3)")
-    }
-
-    @Test func dollarFollowedByNonDigitIsLiteral() {
-        // Lenient: a stray `$x` in a template stays as `$x` rather than
-        // exploding. Users who want `$1` as literal text should use
-        // `$$1`.
-        let c = ctx(chain: [node("git")])
-        #expect(renderTemplate("hello $world", context: c, captures: []) == "hello $world")
-        #expect(renderTemplate("end with $", context: c, captures: []) == "end with $")
     }
 }
 
@@ -377,9 +221,7 @@ struct RequestRuleEngineTests {
         // built-in default would also match.
         let custom = RequestRule(
             name: "Custom op read",
-            matcher: RequestMatcher(
-                processName: ["op"], subcommand: ["read"], binaryVerified: true
-            ),
+            predicate: #"triggerName == "op" AND subcommand == "read" AND binaryVerified == YES"#,
             template: "is pulling ‘{op_uri}’ from 1Password",
             kind: .onePasswordCLI
         )
@@ -391,6 +233,26 @@ struct RequestRuleEngineTests {
         let r = RequestRuleEngine.evaluate(rules: rules, context: c)
         #expect(r?.rule.id == custom.id)
         #expect(r?.rendered == "is pulling ‘op://X/Y’ from 1Password")
+    }
+
+    @Test func malformedPredicateIsSkippedNotFatal() {
+        // A bad predicate string must not crash the engine — the rule is
+        // skipped (with a log) and evaluation continues to the next rule.
+        let broken = RequestRule(
+            name: "Broken",
+            predicate: "this is not a predicate (",
+            template: "x",
+            kind: .ssh
+        )
+        let working = RequestRule(
+            name: "Works",
+            predicate: #"triggerName == "git""#,
+            template: "ok",
+            kind: .ssh
+        )
+        let c = ctx(chain: [node("git")])
+        let r = RequestRuleEngine.evaluate(rules: [broken, working], context: c)
+        #expect(r?.rule.name == "Works")
     }
 }
 
@@ -417,7 +279,7 @@ struct StoresTests {
         let store = RequestRuleStore(fileURL: url)
         let custom = RequestRule(
             name: "Custom",
-            matcher: RequestMatcher(processName: ["ssh"]),
+            predicate: #"triggerName == "ssh""#,
             template: "hi",
             kind: .ssh
         )
@@ -445,7 +307,7 @@ struct StoresTests {
         let url = tempDir().appendingPathComponent("rules.json")
         let store = RequestRuleStore(fileURL: url)
         store.setUserRules([
-            RequestRule(name: "x", matcher: RequestMatcher(), template: "x", kind: .unknown)
+            RequestRule(name: "x", predicate: "TRUEPREDICATE", template: "x", kind: .unknown)
         ])
         store.setBuiltInDisabled(id: "ssh", disabled: true)
         store.clearUserRules()
@@ -460,7 +322,7 @@ struct StoresTests {
         let url = tempDir().appendingPathComponent("rules.json")
         let store = RequestRuleStore(fileURL: url)
         let userRule = RequestRule(
-            name: "U", matcher: RequestMatcher(processName: ["ssh"]),
+            name: "U", predicate: #"triggerName == "ssh""#,
             template: "u", kind: .ssh
         )
         store.setUserRules([userRule])
@@ -485,7 +347,7 @@ struct StoresTests {
     @Test func engineSkipsDisabledRules() {
         let userRule = RequestRule(
             name: "shadow",
-            matcher: RequestMatcher(processName: ["ssh"]),
+            predicate: #"triggerName == "ssh""#,
             template: "user-template",
             kind: .ssh,
             enabled: false
@@ -509,7 +371,7 @@ struct StoresTests {
         let store = RequestRuleStore(fileURL: url)
         let userRule = RequestRule(
             name: "with-comment",
-            matcher: RequestMatcher(processName: ["op"]),
+            predicate: #"triggerName == "op""#,
             template: "x",
             kind: .onePasswordCLI,
             comment: "Friendly reminder: this rule shadows the op-read built-in."
@@ -521,22 +383,22 @@ struct StoresTests {
             "Friendly reminder: this rule shadows the op-read built-in.")
     }
 
-    /// Decoding a rule.json written by v0.5.x (no `enabled` or `comment`
-    /// keys) must succeed, with the defaults filled in. Tests the
-    /// custom Codable initializer that backstops the new fields.
+    /// Decoding a rule with only the required fields (no `enabled` or
+    /// `comment` keys) must succeed, with the defaults filled in. Tests
+    /// the custom Codable initializer that backstops the optional fields.
     @Test func ruleDecodesWithoutEnabledOrComment() throws {
-        let legacy = """
+        let minimal = """
         {
           "id": "00000000-0000-0000-0000-000000000001",
-          "name": "legacy",
-          "matcher": {},
+          "name": "minimal",
+          "predicate": "TRUEPREDICATE",
           "template": "x",
           "replacesActor": false,
           "kind": "unknown",
           "isWarning": false
         }
         """.data(using: .utf8)!
-        let rule = try JSONDecoder().decode(RequestRule.self, from: legacy)
+        let rule = try JSONDecoder().decode(RequestRule.self, from: minimal)
         #expect(rule.enabled == true)
         #expect(rule.comment == nil)
     }
@@ -551,44 +413,14 @@ struct StoresTests {
         #expect(store.allRules == RequestRule.builtIns)
     }
 
-    @Test func ruleStoreMigratesLegacyArrayFormat() {
-        // v1 schema: top-level JSON array. Loader should detect and
-        // promote it to userRules with no built-ins disabled — the old
-        // list keeps running first, new built-ins also take effect.
-        let url = tempDir().appendingPathComponent("rules.json")
-        let legacy = #"""
-        [
-          {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "name": "Legacy ssh override",
-            "matcher": { "processName": ["ssh"] },
-            "template": "legacy ssh",
-            "replacesActor": false,
-            "kind": "ssh",
-            "isWarning": false
-          }
-        ]
-        """#
-        try! legacy.data(using: .utf8)!.write(to: url)
-        let store = RequestRuleStore(fileURL: url)
-        #expect(store.userRules.count == 1)
-        #expect(store.userRules.first?.name == "Legacy ssh override")
-        #expect(store.disabledBuiltInIDs.isEmpty)
-        // Saving rewrites the file in v2 format.
-        store.save()
-        let raw = try! String(contentsOf: url, encoding: .utf8)
-        #expect(raw.contains("\"version\""))
-        #expect(raw.contains("\"userRules\""))
-    }
-
     @Test func userRulesEvaluatedBeforeBuiltIns() {
-        // A user rule with the same predicate as a built-in must win
-        // even when the built-in is also enabled.
+        // A user rule that matches the same trigger as a built-in must
+        // win because user rules come first in `allRules`.
         let url = tempDir().appendingPathComponent("rules.json")
         let store = RequestRuleStore(fileURL: url)
         let shadow = RequestRule(
             name: "Custom git override",
-            matcher: RequestMatcher(processName: ["git"]),
+            predicate: #"triggerName == "git""#,
             template: "custom git output",
             kind: .ssh
         )

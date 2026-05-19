@@ -42,196 +42,33 @@ public struct MatchContext {
     public var binaryVerified: Bool { chain.first?.isVerifiedOnePasswordCLI ?? false }
 }
 
-/// Identifies which `MatchContext` field a `RegexCapture` runs against.
-public enum RegexCaptureSource: String, Codable, Equatable, CaseIterable {
-    /// `ctx.pluginUpdate?.remoteURL`.
-    case pluginRemote
-    /// `ctx.cwd`.
-    case cwd
-    /// `ctx.triggerCwd`.
-    case triggerCwd
-    /// `ctx.triggerArgv` joined with a single space.
-    case argvJoined
-}
-
-/// Runs `pattern` (NSRegularExpression syntax) against one
-/// `MatchContext`-derived string. Acts as both an additional matcher
-/// predicate (rule only matches if the regex matches) and the source of
-/// `$N` capture groups in the template.
-public struct RegexCapture: Codable, Equatable {
-    public var source: RegexCaptureSource
-    public var pattern: String
-
-    public init(source: RegexCaptureSource, pattern: String) {
-        self.source = source
-        self.pattern = pattern
-    }
-
-    /// Resolve the source string from `ctx`. Returns nil/"" when the
-    /// chosen field is missing — the matcher treats that as no-match.
-    public func sourceValue(in ctx: MatchContext) -> String? {
-        switch source {
-        case .pluginRemote: return ctx.pluginUpdate?.remoteURL
-        case .cwd: return ctx.cwd
-        case .triggerCwd: return ctx.triggerCwd
-        case .argvJoined:
-            return ctx.triggerArgv.isEmpty ? nil : ctx.triggerArgv.joined(separator: " ")
-        }
-    }
-
-    /// First-match capture groups. Index 0 is the whole match; 1…n are
-    /// the parenthesised groups. Empty array on no source / no match /
-    /// invalid pattern.
-    public func captures(in ctx: MatchContext) -> [String] {
-        guard let src = sourceValue(in: ctx), !src.isEmpty,
-              let re = try? NSRegularExpression(pattern: pattern) else {
-            return []
-        }
-        let range = NSRange(src.startIndex..., in: src)
-        guard let m = re.firstMatch(in: src, range: range) else { return [] }
-        var out: [String] = []
-        out.reserveCapacity(m.numberOfRanges)
-        for i in 0..<m.numberOfRanges {
-            if let r = Range(m.range(at: i), in: src) {
-                out.append(String(src[r]))
-            } else {
-                out.append("")
-            }
-        }
-        return out
-    }
-}
-
-/// All-of (AND) predicate over a MatchContext. Each field is optional;
-/// nil means "don't constrain". An empty RequestMatcher matches everything.
-public struct RequestMatcher: Codable, Equatable {
-    /// Trigger process name (chain[0].name). Any-of.
-    public var processName: [String]?
-    /// First non-flag argv token after argv[0]. Any-of. Skips `-C value`,
-    /// `-c key=val`, `--git-dir=…`, `--work-tree`, `--namespace`, and
-    /// any single-token `-x` / `--key=value`.
-    public var subcommand: [String]?
-    /// Every token must appear somewhere in argv (after stripping path
-    /// from argv[0]).
-    public var argvContainsAll: [String]?
-    /// Trigger process's own CWD must start with this prefix. `~` is
-    /// expanded to $HOME.
-    public var triggerCwdPrefix: String?
-    /// The trigger binary must (true) or must-not (false) be signed by
-    /// 1Password's Apple Team ID. Today the signature is only computed
-    /// for `op`; rules constraining this on any other process will
-    /// simply never match.
-    public var binaryVerified: Bool?
-    /// Plugin-update info must be present (true) or absent (false).
-    public var requiresPluginUpdate: Bool?
-    /// Optional regex predicate. When set, the chosen source field must
-    /// exist, be non-empty, and match `pattern`. Capture groups are
-    /// available in the template as `$0` (full match), `$1`, `$2`, …
-    public var regex: RegexCapture?
-
-    public init(
-        processName: [String]? = nil,
-        subcommand: [String]? = nil,
-        argvContainsAll: [String]? = nil,
-        triggerCwdPrefix: String? = nil,
-        binaryVerified: Bool? = nil,
-        requiresPluginUpdate: Bool? = nil,
-        regex: RegexCapture? = nil
-    ) {
-        self.processName = processName
-        self.subcommand = subcommand
-        self.argvContainsAll = argvContainsAll
-        self.triggerCwdPrefix = triggerCwdPrefix
-        self.binaryVerified = binaryVerified
-        self.requiresPluginUpdate = requiresPluginUpdate
-        self.regex = regex
-    }
-
-    /// JSON keys. `binaryVerified` is persisted as `opVerified` for
-    /// backward compatibility with rules.json files written before the
-    /// concept was generalized.
-    enum CodingKeys: String, CodingKey {
-        case processName, subcommand, argvContainsAll, triggerCwdPrefix
-        case binaryVerified = "opVerified"
-        case requiresPluginUpdate
-        case regex
-    }
-
-    public func matches(_ ctx: MatchContext) -> Bool {
-        if let names = processName, !names.contains(ctx.triggerName) {
-            return false
-        }
-        if let subs = subcommand {
-            guard let s = parseSubcommand(argv: ctx.triggerArgv), subs.contains(s) else {
-                return false
-            }
-        }
-        if let needles = argvContainsAll {
-            for token in needles {
-                if !ctx.triggerArgv.contains(token) { return false }
-            }
-        }
-        if let prefix = triggerCwdPrefix {
-            let expanded = expandTilde(prefix)
-            guard let cwd = ctx.triggerCwd, cwd.hasPrefix(expanded) else {
-                return false
-            }
-        }
-        if let want = binaryVerified, ctx.binaryVerified != want {
-            return false
-        }
-        if let want = requiresPluginUpdate {
-            let have = (ctx.pluginUpdate != nil)
-            if want != have { return false }
-        }
-        if let r = regex {
-            if r.captures(in: ctx).isEmpty { return false }
-        }
-        return true
-    }
-
-    /// Capture groups bound by the matcher's regex, or `[]` when no
-    /// regex is configured. Index 0 is the full match; 1…n are the
-    /// parenthesised groups. Exposed so the engine can pass them to the
-    /// template renderer without re-running the regex.
-    public func captures(in ctx: MatchContext) -> [String] {
-        regex?.captures(in: ctx) ?? []
-    }
-
-    /// Single-line summary for the config UI table.
-    public var displaySummary: String {
-        var parts: [String] = []
-        if let names = processName, !names.isEmpty {
-            parts.append(names.joined(separator: "|"))
-        }
-        if let subs = subcommand, !subs.isEmpty {
-            parts.append("sub=" + subs.joined(separator: "|"))
-        }
-        if let argv = argvContainsAll, !argv.isEmpty {
-            parts.append("argv⊇{" + argv.joined(separator: ",") + "}")
-        }
-        if let p = triggerCwdPrefix, !p.isEmpty {
-            parts.append("cwd^=" + p)
-        }
-        if let v = binaryVerified { parts.append(v ? "verified" : "unverified") }
-        if requiresPluginUpdate == true { parts.append("plugin-update") }
-        if requiresPluginUpdate == false { parts.append("no-plugin-update") }
-        if let r = regex { parts.append("re[\(r.source.rawValue)]=\(r.pattern)") }
-        return parts.isEmpty ? "(any)" : parts.joined(separator: " · ")
-    }
-}
-
-/// One ordered rule in the matcher list: predicate + the description shown
-/// in the overlay when it wins.
+/// One ordered rule in the matcher list: NSPredicate-format predicate +
+/// the description shown in the overlay when it wins.
+///
+/// The predicate is a string in NSPredicate's standard syntax, evaluated
+/// against the properties exposed by `PredicateContext` (see
+/// `PredicateContext.exposedKeys` for the full list). Examples:
+///
+///   triggerName == "git" AND subcommand IN {"push","fetch","pull"}
+///   triggerName == "op" AND binaryVerified == NO
+///   triggerName IN {"op-ssh-sign","ssh-keygen"} AND ANY triggerArgv == "sign"
+///   triggerCwd BEGINSWITH "/Users/stig/git"
+///
+/// An empty or `TRUEPREDICATE` predicate matches every context.
 public struct RequestRule: Codable, Equatable, Identifiable {
     public var id: UUID
     public var name: String
-    public var matcher: RequestMatcher
+    /// NSPredicate format string. Parsed lazily by the engine; a string
+    /// the parser rejects causes the engine to skip the rule (with a
+    /// log) rather than crash.
+    public var predicate: String
     /// Template with `{process}`, `{subcommand}`, `{argv}`, `{cwd}`,
     /// `{op_uri}`, `{plugin_remote}`, `{repo}`, `{source}`, `{marketplace}`,
-    /// `{argv[N]}` named placeholders and `$0`/`$1`/… regex capture
-    /// placeholders. A rule that references a placeholder which resolves
-    /// to empty does NOT match — the engine falls through to the next rule.
+    /// and `{argv[N]}` named placeholders. A rule that references a
+    /// placeholder which resolves to empty does NOT match — the engine
+    /// falls through to the next rule. That's how 1a/1b style pairs
+    /// (structured render then raw-URL fallback) coexist on the same
+    /// predicate.
     public var template: String
     /// When true, `template` is the full title (actor prefix is suppressed).
     public var replacesActor: Bool
@@ -257,7 +94,7 @@ public struct RequestRule: Codable, Equatable, Identifiable {
     public init(
         id: UUID = UUID(),
         name: String,
-        matcher: RequestMatcher,
+        predicate: String,
         template: String,
         replacesActor: Bool = false,
         kind: RequestKind,
@@ -268,7 +105,7 @@ public struct RequestRule: Codable, Equatable, Identifiable {
     ) {
         self.id = id
         self.name = name
-        self.matcher = matcher
+        self.predicate = predicate
         self.template = template
         self.replacesActor = replacesActor
         self.kind = kind
@@ -279,12 +116,12 @@ public struct RequestRule: Codable, Equatable, Identifiable {
     }
 
     /// Decoder that treats missing `enabled` / `comment` as defaults so
-    /// rules.json files written by v0.5.x decode cleanly.
+    /// rules.json files written without those fields decode cleanly.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
         self.name = try c.decode(String.self, forKey: .name)
-        self.matcher = try c.decode(RequestMatcher.self, forKey: .matcher)
+        self.predicate = try c.decode(String.self, forKey: .predicate)
         self.template = try c.decode(String.self, forKey: .template)
         self.replacesActor = try c.decodeIfPresent(Bool.self, forKey: .replacesActor) ?? false
         self.kind = try c.decode(RequestKind.self, forKey: .kind)
@@ -295,7 +132,7 @@ public struct RequestRule: Codable, Equatable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, matcher, template, replacesActor, kind, isWarning
+        case id, name, predicate, template, replacesActor, kind, isWarning
         case comment, enabled, builtInID
     }
 }
@@ -310,13 +147,25 @@ public enum RequestRuleEngine {
     /// First-match-wins. A rule whose template references a placeholder
     /// that resolves to empty is treated as a non-match so the engine
     /// falls through to the next rule. Rules with `enabled == false`
-    /// are skipped without being consulted.
+    /// are skipped without being consulted. Rules whose `predicate` is
+    /// rejected by NSPredicate's parser are skipped too (logged once);
+    /// crashing on a bad user-authored predicate would be worse than
+    /// silently falling through.
     public static func evaluate(rules: [RequestRule], context: MatchContext) -> MatchResult? {
+        let bridge = context.predicateBridge()
         for rule in rules {
             guard rule.enabled else { continue }
-            guard rule.matcher.matches(context) else { continue }
-            let captures = rule.matcher.captures(in: context)
-            guard let rendered = renderTemplate(rule.template, context: context, captures: captures) else {
+            let predicate: NSPredicate
+            do {
+                predicate = try PredicateParser.parse(rule.predicate)
+            } catch {
+                Log.app.error(
+                    "Skipping rule \(rule.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                continue
+            }
+            guard predicate.evaluate(with: bridge) else { continue }
+            guard let rendered = renderTemplate(rule.template, context: context) else {
                 continue
             }
             return MatchResult(rule: rule, rendered: rendered)
@@ -329,12 +178,9 @@ public enum RequestRuleEngine {
 /// references a placeholder that resolves to an empty string — the engine
 /// uses that signal to fall through to the next rule.
 ///
-/// Two placeholder syntaxes are supported:
-///   - `{name}` — named context fields (`{process}`, `{cwd}`, …)
-///   - `$N` — capture group `N` from the matcher's regex (0 = whole
-///     match). `$$` renders a literal `$`. `$` followed by a non-digit,
-///     non-`$` character is treated as a literal `$`.
-public func renderTemplate(_ template: String, context: MatchContext, captures: [String] = []) -> String? {
+/// Only `{name}` placeholders are supported. The `{argv[N]}` form indexes
+/// into the trigger argv directly.
+public func renderTemplate(_ template: String, context: MatchContext) -> String? {
     var out = ""
     var i = template.startIndex
     while i < template.endIndex {
@@ -350,30 +196,6 @@ public func renderTemplate(_ template: String, context: MatchContext, captures: 
             if value.isEmpty { return nil }
             out.append(value)
             i = template.index(after: close)
-        } else if c == "$" {
-            let next = template.index(after: i)
-            if next < template.endIndex, template[next] == "$" {
-                out.append("$")
-                i = template.index(after: next)
-                continue
-            }
-            var j = next
-            while j < template.endIndex, template[j].isASCII, template[j].isNumber {
-                j = template.index(after: j)
-            }
-            if j == next {
-                out.append(c)
-                i = next
-                continue
-            }
-            guard let n = Int(template[next..<j]),
-                  n >= 0, n < captures.count else {
-                return nil
-            }
-            let value = captures[n]
-            if value.isEmpty { return nil }
-            out.append(value)
-            i = j
         } else {
             out.append(c)
             i = template.index(after: i)
@@ -450,17 +272,6 @@ public func parseSubcommand(argv: [String]) -> String? {
     return nil
 }
 
-private func expandTilde(_ path: String) -> String {
-    if path == "~" {
-        return FileManager.default.homeDirectoryForCurrentUser.path
-    }
-    if path.hasPrefix("~/") {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return home + path.dropFirst(1)
-    }
-    return path
-}
-
 // MARK: - Built-in ruleset
 
 extension RequestRule {
@@ -478,240 +289,195 @@ extension RequestRule {
     /// means removing the entry; its ID then dangles harmlessly in
     /// users' `disabledBuiltInIDs` sets.
     public static let builtIns: [RequestRule] = [
-            // 1a. Claude plugin housekeeping — structured display when
-            // we can resolve the marketplace via known_marketplaces.json
-            // ({repo} and {source} both empty → rule falls through).
-            RequestRule(
-                name: "Claude plugin update (known marketplace)",
-                matcher: RequestMatcher(
-                    processName: ["git"],
-                    requiresPluginUpdate: true
-                ),
-                template: "Claude plugin update check for {repo} ({source})",
-                replacesActor: true,
-                kind: .ssh,
-                builtInID: "plugin-update-known-marketplace"
-            ),
-            // 1b. Claude plugin housekeeping — fallback when the
-            // marketplace lookup missed (file absent, entry not yet
-            // written, or non-marketplace plugin repo). Shows the raw
-            // remote URL.
-            RequestRule(
-                name: "Claude plugin update",
-                matcher: RequestMatcher(
-                    processName: ["git"],
-                    requiresPluginUpdate: true
-                ),
-                template: "Claude plugin update check from {plugin_remote}",
-                replacesActor: true,
-                kind: .ssh,
-                builtInID: "plugin-update-fallback"
-            ),
-            // 2a. Commit signing with a known cwd.
-            RequestRule(
-                name: "Commit signing (with cwd)",
-                matcher: RequestMatcher(
-                    processName: ["op-ssh-sign", "ssh-keygen"],
-                    argvContainsAll: ["sign", "git"]
-                ),
-                template: "is signing a commit in {cwd}",
-                kind: .ssh,
-                builtInID: "commit-signing-with-cwd"
-            ),
-            // 2b. Commit signing fallback (no cwd).
-            RequestRule(
-                name: "Commit signing",
-                matcher: RequestMatcher(
-                    processName: ["op-ssh-sign", "ssh-keygen"],
-                    argvContainsAll: ["sign", "git"]
-                ),
-                template: "is signing a commit",
-                kind: .ssh,
-                builtInID: "commit-signing"
-            ),
-            // 3. Other SSH signing (key conversion, fingerprinting via 1Password agent).
-            RequestRule(
-                name: "Other SSH signing",
-                matcher: RequestMatcher(processName: ["op-ssh-sign", "ssh-keygen"]),
-                template: "is signing with an SSH key",
-                kind: .ssh,
-                builtInID: "other-ssh-signing"
-            ),
-            // 4. Git network subcommand.
-            RequestRule(
-                name: "Git network operation",
-                matcher: RequestMatcher(
-                    processName: ["git"],
-                    subcommand: [
-                        "fetch", "pull", "push", "clone", "ls-remote", "archive",
-                        "remote", "submodule", "send-pack", "receive-pack",
-                        "upload-pack", "fetch-pack",
-                    ]
-                ),
-                template: "needs an SSH key for ‘git {subcommand}’",
-                kind: .ssh,
-                builtInID: "git-network"
-            ),
-            // 5. Git fallback (no recognized subcommand — preserves legacy test).
-            RequestRule(
-                name: "Git fallback",
-                matcher: RequestMatcher(processName: ["git"]),
-                template: "needs an SSH key (via ‘git’)",
-                kind: .ssh,
-                builtInID: "git-fallback"
-            ),
-            // 6. Plain ssh — no "via" qualifier per existing UX.
-            RequestRule(
-                name: "ssh",
-                matcher: RequestMatcher(processName: ["ssh"]),
-                template: "needs an SSH key",
-                kind: .ssh,
-                builtInID: "ssh"
-            ),
-            // 7. scp / sftp / rsync — qualified with the tool name.
-            RequestRule(
-                name: "scp / sftp / rsync",
-                matcher: RequestMatcher(processName: ["scp", "sftp", "rsync"]),
-                template: "needs an SSH key (via ‘{process}’)",
-                kind: .ssh,
-                builtInID: "scp-sftp-rsync"
-            ),
-            // 8a. Unverified op CLI with a parseable op invocation. Uses the
-            // {op_phrase} placeholder so the parens read identically to the
-            // pre-engine output ("(read op://X/Y)") rather than including
-            // the binary name twice.
-            RequestRule(
-                name: "Unverified op (with phrase)",
-                matcher: RequestMatcher(processName: ["op"], binaryVerified: false),
-                template: "is running an unverified ‘op’ binary ({op_phrase})",
-                kind: .unverifiedOp,
-                isWarning: true,
-                builtInID: "unverified-op-with-phrase"
-            ),
-            // 8b. Unverified op fallback.
-            RequestRule(
-                name: "Unverified op",
-                matcher: RequestMatcher(processName: ["op"], binaryVerified: false),
-                template: "is running an unverified ‘op’ binary",
-                kind: .unverifiedOp,
-                isWarning: true,
-                builtInID: "unverified-op"
-            ),
-            // 9a. op read with explicit URI.
-            RequestRule(
-                name: "op read (URI)",
-                matcher: RequestMatcher(
-                    processName: ["op"], subcommand: ["read"], binaryVerified: true
-                ),
-                template: "wants to read {op_uri}",
-                kind: .onePasswordCLI,
-                builtInID: "op-read-uri"
-            ),
-            // 9b. op read fallback (no URI parsed).
-            RequestRule(
-                name: "op read",
-                matcher: RequestMatcher(
-                    processName: ["op"], subcommand: ["read"], binaryVerified: true
-                ),
-                template: "wants to use ‘op read’",
-                kind: .onePasswordCLI,
-                builtInID: "op-read"
-            ),
-            // 10. op signin.
-            RequestRule(
-                name: "op signin",
-                matcher: RequestMatcher(
-                    processName: ["op"], subcommand: ["signin"], binaryVerified: true
-                ),
-                template: "wants to sign in to 1Password",
-                kind: .onePasswordCLI,
-                builtInID: "op-signin"
-            ),
-            // 11. op signout.
-            RequestRule(
-                name: "op signout",
-                matcher: RequestMatcher(
-                    processName: ["op"], subcommand: ["signout"], binaryVerified: true
-                ),
-                template: "wants to sign out of 1Password",
-                kind: .onePasswordCLI,
-                builtInID: "op-signout"
-            ),
-            // 12. op inject.
-            RequestRule(
-                name: "op inject",
-                matcher: RequestMatcher(
-                    processName: ["op"], subcommand: ["inject"], binaryVerified: true
-                ),
-                template: "wants to inject secrets via ‘op inject’",
-                kind: .onePasswordCLI,
-                builtInID: "op-inject"
-            ),
-            // 13. op run.
-            RequestRule(
-                name: "op run",
-                matcher: RequestMatcher(
-                    processName: ["op"], subcommand: ["run"], binaryVerified: true
-                ),
-                template: "wants to run a command with ‘op run’",
-                kind: .onePasswordCLI,
-                builtInID: "op-run"
-            ),
-            // 14a. Known resource group with action — "op vault list".
-            RequestRule(
-                name: "op resource action",
-                matcher: RequestMatcher(
-                    processName: ["op"],
-                    subcommand: [
-                        "item", "vault", "document", "user", "group", "account",
-                        "ssh", "connect", "service-account", "events-api",
-                    ],
-                    binaryVerified: true
-                ),
-                template: "wants to use ‘op {subcommand} {argv[2]}’",
-                kind: .onePasswordCLI,
-                builtInID: "op-resource-with-action"
-            ),
-            // 14b. Same resource group without action — "op vault".
-            RequestRule(
-                name: "op resource",
-                matcher: RequestMatcher(
-                    processName: ["op"],
-                    subcommand: [
-                        "item", "vault", "document", "user", "group", "account",
-                        "ssh", "connect", "service-account", "events-api",
-                    ],
-                    binaryVerified: true
-                ),
-                template: "wants to use ‘op {subcommand}’",
-                kind: .onePasswordCLI,
-                builtInID: "op-resource"
-            ),
-            // 15. Any other op subcommand — "wants to run 'op something'".
-            RequestRule(
-                name: "op other subcommand",
-                matcher: RequestMatcher(processName: ["op"], binaryVerified: true),
-                template: "wants to run ‘op {subcommand}’",
-                kind: .onePasswordCLI,
-                builtInID: "op-other-subcommand"
-            ),
-            // 16. op with no parseable subcommand.
-            RequestRule(
-                name: "op (no subcommand)",
-                matcher: RequestMatcher(processName: ["op"], binaryVerified: true),
-                template: "is using the 1Password CLI",
-                kind: .onePasswordCLI,
-                builtInID: "op-no-subcommand"
-            ),
-            // 17. Fallback: anything unrecognized.
-            RequestRule(
-                name: "Unknown trigger",
-                matcher: RequestMatcher(),
-                template: "triggered 1Password (via ‘{process}’)",
-                kind: .unknown,
-                isWarning: true,
-                builtInID: "unknown-trigger"
-            ),
+        // 1a. Claude plugin housekeeping — structured display when
+        // we can resolve the marketplace via known_marketplaces.json
+        // ({repo} and {source} both empty → rule falls through).
+        RequestRule(
+            name: "Claude plugin update (known marketplace)",
+            predicate: #"triggerName == "git" AND pluginUpdateAvailable == YES"#,
+            template: "Claude plugin update check for {repo} ({source})",
+            replacesActor: true,
+            kind: .ssh,
+            builtInID: "plugin-update-known-marketplace"
+        ),
+        // 1b. Claude plugin housekeeping — fallback when the
+        // marketplace lookup missed (file absent, entry not yet
+        // written, or non-marketplace plugin repo). Shows the raw
+        // remote URL.
+        RequestRule(
+            name: "Claude plugin update",
+            predicate: #"triggerName == "git" AND pluginUpdateAvailable == YES"#,
+            template: "Claude plugin update check from {plugin_remote}",
+            replacesActor: true,
+            kind: .ssh,
+            builtInID: "plugin-update-fallback"
+        ),
+        // 2a. Commit signing with a known cwd.
+        RequestRule(
+            name: "Commit signing (with cwd)",
+            predicate: #"triggerName IN {"op-ssh-sign","ssh-keygen"} AND ANY triggerArgv == "sign" AND ANY triggerArgv == "git""#,
+            template: "is signing a commit in {cwd}",
+            kind: .ssh,
+            builtInID: "commit-signing-with-cwd"
+        ),
+        // 2b. Commit signing fallback (no cwd).
+        RequestRule(
+            name: "Commit signing",
+            predicate: #"triggerName IN {"op-ssh-sign","ssh-keygen"} AND ANY triggerArgv == "sign" AND ANY triggerArgv == "git""#,
+            template: "is signing a commit",
+            kind: .ssh,
+            builtInID: "commit-signing"
+        ),
+        // 3. Other SSH signing (key conversion, fingerprinting via 1Password agent).
+        RequestRule(
+            name: "Other SSH signing",
+            predicate: #"triggerName IN {"op-ssh-sign","ssh-keygen"}"#,
+            template: "is signing with an SSH key",
+            kind: .ssh,
+            builtInID: "other-ssh-signing"
+        ),
+        // 4. Git network subcommand.
+        RequestRule(
+            name: "Git network operation",
+            predicate: #"triggerName == "git" AND subcommand IN {"fetch","pull","push","clone","ls-remote","archive","remote","submodule","send-pack","receive-pack","upload-pack","fetch-pack"}"#,
+            template: "needs an SSH key for ‘git {subcommand}’",
+            kind: .ssh,
+            builtInID: "git-network"
+        ),
+        // 5. Git fallback (no recognized subcommand — preserves legacy test).
+        RequestRule(
+            name: "Git fallback",
+            predicate: #"triggerName == "git""#,
+            template: "needs an SSH key (via ‘git’)",
+            kind: .ssh,
+            builtInID: "git-fallback"
+        ),
+        // 6. Plain ssh — no "via" qualifier per existing UX.
+        RequestRule(
+            name: "ssh",
+            predicate: #"triggerName == "ssh""#,
+            template: "needs an SSH key",
+            kind: .ssh,
+            builtInID: "ssh"
+        ),
+        // 7. scp / sftp / rsync — qualified with the tool name.
+        RequestRule(
+            name: "scp / sftp / rsync",
+            predicate: #"triggerName IN {"scp","sftp","rsync"}"#,
+            template: "needs an SSH key (via ‘{process}’)",
+            kind: .ssh,
+            builtInID: "scp-sftp-rsync"
+        ),
+        // 8a. Unverified op CLI with a parseable op invocation. Uses the
+        // {op_phrase} placeholder so the parens read identically to the
+        // pre-engine output ("(read op://X/Y)") rather than including
+        // the binary name twice.
+        RequestRule(
+            name: "Unverified op (with phrase)",
+            predicate: #"triggerName == "op" AND binaryVerified == NO"#,
+            template: "is running an unverified ‘op’ binary ({op_phrase})",
+            kind: .unverifiedOp,
+            isWarning: true,
+            builtInID: "unverified-op-with-phrase"
+        ),
+        // 8b. Unverified op fallback.
+        RequestRule(
+            name: "Unverified op",
+            predicate: #"triggerName == "op" AND binaryVerified == NO"#,
+            template: "is running an unverified ‘op’ binary",
+            kind: .unverifiedOp,
+            isWarning: true,
+            builtInID: "unverified-op"
+        ),
+        // 9a. op read with explicit URI.
+        RequestRule(
+            name: "op read (URI)",
+            predicate: #"triggerName == "op" AND subcommand == "read" AND binaryVerified == YES"#,
+            template: "wants to read {op_uri}",
+            kind: .onePasswordCLI,
+            builtInID: "op-read-uri"
+        ),
+        // 9b. op read fallback (no URI parsed).
+        RequestRule(
+            name: "op read",
+            predicate: #"triggerName == "op" AND subcommand == "read" AND binaryVerified == YES"#,
+            template: "wants to use ‘op read’",
+            kind: .onePasswordCLI,
+            builtInID: "op-read"
+        ),
+        // 10. op signin.
+        RequestRule(
+            name: "op signin",
+            predicate: #"triggerName == "op" AND subcommand == "signin" AND binaryVerified == YES"#,
+            template: "wants to sign in to 1Password",
+            kind: .onePasswordCLI,
+            builtInID: "op-signin"
+        ),
+        // 11. op signout.
+        RequestRule(
+            name: "op signout",
+            predicate: #"triggerName == "op" AND subcommand == "signout" AND binaryVerified == YES"#,
+            template: "wants to sign out of 1Password",
+            kind: .onePasswordCLI,
+            builtInID: "op-signout"
+        ),
+        // 12. op inject.
+        RequestRule(
+            name: "op inject",
+            predicate: #"triggerName == "op" AND subcommand == "inject" AND binaryVerified == YES"#,
+            template: "wants to inject secrets via ‘op inject’",
+            kind: .onePasswordCLI,
+            builtInID: "op-inject"
+        ),
+        // 13. op run.
+        RequestRule(
+            name: "op run",
+            predicate: #"triggerName == "op" AND subcommand == "run" AND binaryVerified == YES"#,
+            template: "wants to run a command with ‘op run’",
+            kind: .onePasswordCLI,
+            builtInID: "op-run"
+        ),
+        // 14a. Known resource group with action — "op vault list".
+        RequestRule(
+            name: "op resource action",
+            predicate: #"triggerName == "op" AND subcommand IN {"item","vault","document","user","group","account","ssh","connect","service-account","events-api"} AND binaryVerified == YES"#,
+            template: "wants to use ‘op {subcommand} {argv[2]}’",
+            kind: .onePasswordCLI,
+            builtInID: "op-resource-with-action"
+        ),
+        // 14b. Same resource group without action — "op vault".
+        RequestRule(
+            name: "op resource",
+            predicate: #"triggerName == "op" AND subcommand IN {"item","vault","document","user","group","account","ssh","connect","service-account","events-api"} AND binaryVerified == YES"#,
+            template: "wants to use ‘op {subcommand}’",
+            kind: .onePasswordCLI,
+            builtInID: "op-resource"
+        ),
+        // 15. Any other op subcommand — "wants to run 'op something'".
+        RequestRule(
+            name: "op other subcommand",
+            predicate: #"triggerName == "op" AND binaryVerified == YES"#,
+            template: "wants to run ‘op {subcommand}’",
+            kind: .onePasswordCLI,
+            builtInID: "op-other-subcommand"
+        ),
+        // 16. op with no parseable subcommand.
+        RequestRule(
+            name: "op (no subcommand)",
+            predicate: #"triggerName == "op" AND binaryVerified == YES"#,
+            template: "is using the 1Password CLI",
+            kind: .onePasswordCLI,
+            builtInID: "op-no-subcommand"
+        ),
+        // 17. Fallback: anything unrecognized.
+        RequestRule(
+            name: "Unknown trigger",
+            predicate: "TRUEPREDICATE",
+            template: "triggered 1Password (via ‘{process}’)",
+            kind: .unknown,
+            isWarning: true,
+            builtInID: "unknown-trigger"
+        ),
     ]
 
     /// Look up a built-in by its stable ID. Returns nil for unknown IDs
@@ -722,11 +488,10 @@ extension RequestRule {
     }
 }
 
-/// Globals consulted by the engine. The app sets these once at startup
-/// from the user's stored configuration; tests get the built-in defaults.
+/// Process-wide rule list. The store seeds this on launch with the
+/// merged user + built-in list and rewrites it on every save, so
+/// `makeRequestSummary` and the watcher can read a single source of
+/// truth without threading the store through every call site.
 public enum OpWhoConfig {
-    /// Ordered rule list evaluated by `makeRequestSummary`. Composed by
-    /// the store as user rules followed by the built-ins, with disabled
-    /// rules carrying `enabled = false`.
     public static var rules: [RequestRule] = RequestRule.builtIns
 }
