@@ -27,7 +27,18 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let nameField = NSTextField()
     /// NSPredicate-format text view. Multi-line because real-world rule
     /// predicates with IN-sets and AND-chains spill past one line fast.
-    private let predicateView = NSTextView()
+    /// The subclass extends `rangeForUserCompletion` so dotted keypaths
+    /// (e.g. `triggerArgv.@count`) complete as one word.
+    private let predicateView = PredicateTextView()
+    /// Set while `loadDetailFromSelection` is writing the predicate field
+    /// programmatically, so the textDidChange notification doesn't
+    /// auto-trigger the completion popup on a load.
+    private var isLoadingDetail = false
+    /// Length of `predicateView.string` after the last edit, in UTF-16
+    /// units. Used to distinguish insertions (length grew → consider
+    /// triggering completion) from deletions (length shrank → leave the
+    /// user alone so backspacing doesn't re-popup endlessly).
+    private var previousPredicateLength = 0
     private let predicateScroll = NSScrollView()
     /// Inline error display under the predicate field. Shows the
     /// NSPredicate parser's reason text when the current input fails to
@@ -789,6 +800,11 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     // MARK: - Detail form ↔ rule
 
     private func loadDetailFromSelection() {
+        isLoadingDetail = true
+        defer {
+            previousPredicateLength = (predicateView.string as NSString).length
+            isLoadingDetail = false
+        }
         guard let id = selectedRuleID,
               let rule = store.allRules.first(where: { $0.id == id }) else {
             clearDetail()
@@ -862,6 +878,68 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 extension RulesPane: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         commitDetail()
+        guard let textView = notification.object as? NSTextView,
+              textView === predicateView else { return }
+        let nsString = predicateView.string as NSString
+        let newLength = nsString.length
+        let grew = newLength > previousPredicateLength
+        previousPredicateLength = newLength
+        guard !isLoadingDetail, grew else { return }
+        let caret = predicateView.selectedRange().location
+        guard caret > 0, caret <= newLength else { return }
+        let unit = nsString.character(at: caret - 1)
+        guard let scalar = Unicode.Scalar(unit) else { return }
+        let ch = Character(scalar)
+        let isContinue =
+            ch.isLetter || ch.isNumber
+            || ch == "_" || ch == "@" || ch == "$" || ch == "."
+        guard isContinue else { return }
+        // Hop to the next runloop turn: `complete(_:)` reaches into the
+        // text view's layout machinery, and calling it synchronously
+        // inside a textDidChange callback can corner-case into a layout
+        // assertion on macOS.
+        DispatchQueue.main.async { [weak self] in
+            self?.predicateView.complete(nil)
+        }
+    }
+
+    func textView(_ textView: NSTextView,
+                  completions words: [String],
+                  forPartialWordRange charRange: NSRange,
+                  indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+        // Don't disturb the default completion path for the comment
+        // editor or any other text view that ever ends up routed here.
+        guard textView === predicateView else { return words }
+        let partial = (textView.string as NSString).substring(with: charRange)
+        return PredicateCompletions.candidates(forPartialWord: partial)
+    }
+}
+
+// MARK: - Predicate text view
+
+/// NSTextView subclass that widens the completion partial-word range to
+/// include dotted keypaths. AppKit's default `rangeForUserCompletion`
+/// stops at `.`, so a user typing `triggerArgv.@cou` would only see
+/// `@cou` as the partial word and never get `@count` offered. We walk
+/// leftward across identifier-continue characters (letters, digits, `_`,
+/// `@`, `$`, `.`) so the whole keypath is treated as one word.
+private final class PredicateTextView: NSTextView {
+    override var rangeForUserCompletion: NSRange {
+        let base = super.rangeForUserCompletion
+        let nsString = self.string as NSString
+        var loc = base.location
+        while loc > 0 {
+            let unit = nsString.character(at: loc - 1)
+            guard let scalar = Unicode.Scalar(unit) else { break }
+            let ch = Character(scalar)
+            let isContinue =
+                ch.isLetter || ch.isNumber
+                || ch == "_" || ch == "@" || ch == "$" || ch == "."
+            if !isContinue { break }
+            loc -= 1
+        }
+        let extra = base.location - loc
+        return NSRange(location: loc, length: base.length + extra)
     }
 }
 
