@@ -42,6 +42,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let builtInNotice = NSTextField(
         labelWithString: "Built-in rule — read-only. Use “+ → Clone Selected Rule” to make an editable copy."
     )
+    private let predicateHighlighter = PredicateHighlighter(knownKeys: PredicateContext.exposedKeys)
 
     /// Editable detail controls, gathered once so we can flip them all to
     /// disabled (read-only) when a built-in is selected. The predicate
@@ -302,6 +303,12 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         predicateScroll.translatesAutoresizingMaskIntoConstraints = false
         predicateScroll.heightAnchor.constraint(equalToConstant: 72).isActive = true
         predicateScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+
+        // Install the syntax highlighter on the text storage. The
+        // highlighter watches edits and re-applies foreground colours
+        // (plus an orange underline for unknown keypaths) on every
+        // change.
+        predicateHighlighter.install(on: predicateView)
     }
 
     private func configureCommentView() {
