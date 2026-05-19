@@ -6,7 +6,13 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .target(
+            name: "OpWhoObjCShim",
+            path: "Sources/OpWhoObjCShim",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "OpWhoLib",
+            dependencies: ["OpWhoObjCShim"],
             path: "Sources/OpWhoLib",
             exclude: ["Info.plist"],
             linkerSettings: [
