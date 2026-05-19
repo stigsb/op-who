@@ -599,6 +599,19 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         if let s = sub {
             matcher.subcommand = [s]
         }
+        // Surface every non-flag argv token (other than argv[0] and the
+        // parsed subcommand) as a contains-all narrowing, and pre-fill
+        // the cwd prefix from whichever cwd the recent record captured.
+        // Both fields are visible in the source-request preview, so
+        // leaving them empty made the prefill look broken — the user
+        // can prune what they don't want to constrain on.
+        let argvTokens = nonFlagArgvTokens(argv: recent.triggerArgv, skipSubcommand: sub)
+        if !argvTokens.isEmpty {
+            matcher.argvContainsAll = argvTokens
+        }
+        if let cwd = recent.triggerCwd ?? recent.cwd, !cwd.isEmpty {
+            matcher.triggerCwdPrefix = cwd
+        }
         if process == "op" {
             matcher.binaryVerified = recent.binaryVerified
         }
@@ -641,6 +654,37 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             name: label, matcher: matcher, template: template,
             replacesActor: replacesActor, kind: kind, isWarning: isWarning
         )
+    }
+
+    /// Non-flag argv tokens after argv[0], with the parsed subcommand
+    /// (if any) excluded. Mirrors `parseSubcommand`'s flag handling: pair
+    /// flags like `-C path` are skipped as a unit so the path doesn't
+    /// leak in as if it were a positional argument.
+    private func nonFlagArgvTokens(argv: [String], skipSubcommand: String?) -> [String] {
+        guard argv.count > 1 else { return [] }
+        let pairFlags: Set<String> = ["-C", "-c", "--git-dir", "--work-tree", "--namespace"]
+        var tokens: [String] = []
+        var subcommandConsumed = (skipSubcommand == nil)
+        var i = 1
+        while i < argv.count {
+            let a = argv[i]
+            if pairFlags.contains(a) {
+                i += 2
+                continue
+            }
+            if a.hasPrefix("-") {
+                i += 1
+                continue
+            }
+            if !subcommandConsumed, a == skipSubcommand {
+                subcommandConsumed = true
+                i += 1
+                continue
+            }
+            tokens.append(a)
+            i += 1
+        }
+        return tokens
     }
 
     private func moveSelected(by delta: Int) {
