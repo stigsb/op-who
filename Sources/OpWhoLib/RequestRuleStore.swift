@@ -247,6 +247,41 @@ public struct RecentRequest: Codable, Identifiable, Equatable {
         self.matchedRuleName = matchedRuleName
         self.matchedBuiltInID = matchedBuiltInID
     }
+
+    /// Reconstruct a `MatchContext` from this recent record's persisted
+    /// fields. Used by the Test Predicate sheet to replay a predicate
+    /// against past captures.
+    ///
+    /// Best-effort: ProcessNode pid/ppid info isn't stored, so the
+    /// chain is rebuilt from `chainNames` with synthesised pid/ppid
+    /// values; that's fine because rule predicates only ever match on
+    /// names, not pids. The trigger node (index 0) carries the stored
+    /// `binaryVerified` flag because `MatchContext.binaryVerified`
+    /// reads it from `chain.first`.
+    public func makeMatchContext() -> MatchContext {
+        let nodes: [ProcessNode] = chainNames.enumerated().map { idx, name in
+            ProcessNode(
+                pid: pid_t(idx + 1),
+                ppid: pid_t(idx),
+                name: name,
+                tty: nil,
+                executablePath: nil,
+                isVerifiedOnePasswordCLI: (idx == 0 && binaryVerified)
+            )
+        }
+        let pluginUpdate: ClaudePluginUpdate? = pluginRemoteURL.map { url in
+            ClaudePluginUpdate(remoteURL: url)
+        }
+        return MatchContext(
+            chain: nodes,
+            triggerArgv: triggerArgv,
+            cwd: cwd,
+            triggerCwd: triggerCwd,
+            claudeSession: claudeSession,
+            pluginUpdate: pluginUpdate,
+            terminalBundleID: terminalBundleID
+        )
+    }
 }
 
 /// Ring buffer of the last N detected requests, persisted as JSON so the

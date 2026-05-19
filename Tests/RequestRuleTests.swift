@@ -504,6 +504,65 @@ struct StoresTests {
         #expect(decoded.first?.matchedBuiltInID == nil)
     }
 
+    @Test func makeMatchContextRebuildsTriggerNameAndArgv() {
+        let r = RecentRequest(
+            chainNames: ["git", "node"],
+            triggerArgv: ["git", "push", "origin", "main"],
+            cwd: "/Users/x/proj", triggerCwd: "/Users/x/proj",
+            binaryVerified: false,
+            claudeSession: nil, terminalBundleID: nil, tabTitle: nil,
+            pluginRemoteURL: nil,
+            title: "x", subtitle: nil,
+            kindRaw: "ssh", isWarning: false,
+            matchedRuleID: nil, matchedRuleName: nil
+        )
+        let ctx = r.makeMatchContext()
+        #expect(ctx.triggerName == "git")
+        #expect(ctx.triggerArgv == ["git", "push", "origin", "main"])
+        #expect(ctx.triggerCwd == "/Users/x/proj")
+        #expect(ctx.binaryVerified == false)
+        #expect(ctx.chain.map(\.name) == ["git", "node"])
+    }
+
+    @Test func makeMatchContextPreservesBinaryVerifiedOnTrigger() {
+        let r = RecentRequest(
+            chainNames: ["op", "zsh"],
+            triggerArgv: ["op", "read", "op://x/y"],
+            cwd: nil, triggerCwd: nil,
+            binaryVerified: true,
+            claudeSession: nil, terminalBundleID: nil, tabTitle: nil,
+            pluginRemoteURL: nil,
+            title: "x", subtitle: nil,
+            kindRaw: "onePasswordCLI", isWarning: false,
+            matchedRuleID: nil, matchedRuleName: nil
+        )
+        let ctx = r.makeMatchContext()
+        // binaryVerified reads from chain.first, so the flag has to land
+        // on the trigger node specifically.
+        #expect(ctx.binaryVerified == true)
+        #expect(ctx.chain.first?.isVerifiedOnePasswordCLI == true)
+        #expect(ctx.chain.last?.isVerifiedOnePasswordCLI == false)
+    }
+
+    @Test func makeMatchContextReconstructsPluginUpdateFromRemoteURL() {
+        let r = RecentRequest(
+            chainNames: ["git"],
+            triggerArgv: ["git", "pull"],
+            cwd: nil, triggerCwd: nil, binaryVerified: false,
+            claudeSession: nil, terminalBundleID: nil, tabTitle: nil,
+            pluginRemoteURL: "git@github.com:foo/bar.git",
+            title: "x", subtitle: nil,
+            kindRaw: "ssh", isWarning: false,
+            matchedRuleID: nil, matchedRuleName: nil
+        )
+        let ctx = r.makeMatchContext()
+        #expect(ctx.pluginUpdate?.remoteURL == "git@github.com:foo/bar.git")
+        // PredicateContext flattens this to pluginUpdateAvailable; the
+        // test sheet needs that flag set so user predicates like
+        // `pluginUpdateAvailable == YES` actually match.
+        #expect(ctx.predicateBridge().pluginUpdateAvailable == true)
+    }
+
     private func sampleRequest(title: String) -> RecentRequest {
         RecentRequest(
             chainNames: ["op"], triggerArgv: ["op", "read", "op://X/Y"],

@@ -21,6 +21,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let tableView = NSTableView()
     private var selectedRuleID: UUID? = nil
     private var addSheet: AddRuleSheetController?
+    private var testSheet: TestPredicateSheetController?
 
     // Detail form controls.
     private let nameField = NSTextField()
@@ -259,7 +260,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         builtInNotice.isHidden = true
 
         grid.addRow(with: [label("Name"), nameField])
-        grid.addRow(with: [label("Predicate"), predicateScroll])
+        grid.addRow(with: [label("Predicate"), makePredicateEditorRow()])
         grid.addRow(with: [NSView(), predicateError])
         grid.addRow(with: [label("Template"), templateField])
         grid.addRow(with: [label("Comment"), commentScroll])
@@ -282,6 +283,25 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         ])
         detailBox.contentView = content
         return detailBox
+    }
+
+    /// Stack the predicate scroll view alongside a "Test" button so the
+    /// row reads as one editor unit. The button stays right of the
+    /// scroll so its position doesn't shift when the text view's height
+    /// changes (it doesn't today, but the layout is forgiving).
+    private func makePredicateEditorRow() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .top
+        row.spacing = 6
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(predicateScroll)
+
+        let testButton = NSButton(title: "Test…", target: self, action: #selector(testPredicate(_:)))
+        testButton.toolTip = "Evaluate this predicate against every record in the recent-requests ring buffer"
+        testButton.setContentHuggingPriority(.required, for: .horizontal)
+        row.addArrangedSubview(testButton)
+        return row
     }
 
     private func configurePredicateView() {
@@ -537,6 +557,25 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func detailChanged(_ sender: Any?) {
         commitDetail()
+    }
+
+    @objc private func testPredicate(_ sender: Any?) {
+        // Snapshot the current editor contents (rather than the last
+        // saved value) so the user can test a draft they haven't typed
+        // through to a stable state yet.
+        let snapshot = predicateView.string
+        let sheet = TestPredicateSheetController(
+            predicate: snapshot,
+            recents: Array(recentStore.requests.reversed())
+        )
+        self.testSheet = sheet
+        guard let host = presenter, let sheetWindow = sheet.window else {
+            sheet.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        host.beginSheet(sheetWindow) { [weak self] _ in
+            self?.testSheet = nil
+        }
     }
 
     private func commitDetail() {
