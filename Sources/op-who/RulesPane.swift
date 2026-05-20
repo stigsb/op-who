@@ -39,6 +39,13 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// triggering completion) from deletions (length shrank → leave the
     /// user alone so backspacing doesn't re-popup endlessly).
     private var previousPredicateLength = 0
+    /// Defers updates to the inline predicate-error label until the user
+    /// pauses typing. NSPredicate's parser is whole-or-nothing, so every
+    /// intermediate keystroke (e.g. `triggerName ==`) is "invalid";
+    /// publishing the label on every change would flash red constantly.
+    /// 350ms matches the comfort zone used by typical LSP diagnostic
+    /// debouncing.
+    private let predicateErrorDebouncer = Debouncer(interval: 0.35)
     private let predicateScroll = NSScrollView()
     /// Inline error display under the predicate field. Shows the
     /// NSPredicate parser's reason text when the current input fails to
@@ -47,7 +54,16 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let templateField = NSTextField()
     private let commentView = NSTextView()
     private let commentScroll = NSScrollView()
+    /// Live example of what the current draft rule would render in the
+    /// overlay. Re-sampled from `recentStore` on every debounced refresh
+    /// so the user sees the template applied to varied real captures
+    /// rather than a single canned example.
+    private let templatePreview = NSTextField(labelWithString: "")
     private let replacesActorCheckbox = NSButton(checkboxWithTitle: "Replaces actor (full title)", target: nil, action: nil)
+    /// `info.circle` next to the "Replaces actor" checkbox. Hover reveals
+    /// the actor concept — the only place this jargon is explained in the
+    /// UI.
+    private let replacesActorInfo = NSImageView()
     private let isWarningCheckbox = NSButton(checkboxWithTitle: "Render as warning", target: nil, action: nil)
     private let kindPopup = NSPopUpButton()
     private let detailBox = NSBox()
@@ -266,6 +282,15 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         predicateError.preferredMaxLayoutWidth = 560
         predicateError.isHidden = true
 
+        templatePreview.font = NSFont.systemFont(ofSize: 11)
+        templatePreview.textColor = .secondaryLabelColor
+        templatePreview.lineBreakMode = .byWordWrapping
+        templatePreview.maximumNumberOfLines = 2
+        templatePreview.preferredMaxLayoutWidth = 560
+        templatePreview.toolTip = "Sample rendered title using a random captured request. Re-samples while you edit."
+
+        configureReplacesActorInfo()
+
         builtInNotice.font = NSFont.systemFont(ofSize: 11)
         builtInNotice.textColor = .secondaryLabelColor
         builtInNotice.isHidden = true
@@ -274,9 +299,10 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         grid.addRow(with: [label("Predicate"), makePredicateEditorRow()])
         grid.addRow(with: [NSView(), predicateError])
         grid.addRow(with: [label("Template"), templateField])
+        grid.addRow(with: [label("Preview"), templatePreview])
         grid.addRow(with: [label("Comment"), commentScroll])
         grid.addRow(with: [label("Kind"), kindPopup])
-        grid.addRow(with: [NSView(), replacesActorCheckbox])
+        grid.addRow(with: [NSView(), makeReplacesActorRow()])
         grid.addRow(with: [NSView(), isWarningCheckbox])
         grid.addRow(with: [NSView(), builtInNotice])
 
@@ -300,6 +326,43 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// row reads as one editor unit. The button stays right of the
     /// scroll so its position doesn't shift when the text view's height
     /// changes (it doesn't today, but the layout is forgiving).
+    /// Pack the "Replaces actor" checkbox alongside the info button so
+    /// they read as one unit, with the info hugging the checkbox's
+    /// trailing edge.
+    private func makeReplacesActorRow() -> NSView {
+        let row = NSStackView(views: [replacesActorCheckbox, replacesActorInfo])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        row.translatesAutoresizingMaskIntoConstraints = false
+        return row
+    }
+
+    private func configureReplacesActorInfo() {
+        let symbol = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "About the actor")
+        replacesActorInfo.image = symbol
+        replacesActorInfo.contentTintColor = .secondaryLabelColor
+        replacesActorInfo.translatesAutoresizingMaskIntoConstraints = false
+        replacesActorInfo.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        replacesActorInfo.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        // Multi-line tooltip — AppKit wraps on \n. Explains the actor
+        // concept once, here, since this is the only UI element that
+        // uses the term.
+        replacesActorInfo.toolTip = """
+            An "actor" is the auto-computed prefix op-who puts in front of \
+            a rule's template — e.g. "Claude Code session 'foo'", \
+            "iTerm tab 'work'", or "Your zsh shell". It identifies WHO \
+            triggered the request, derived from the process chain, terminal, \
+            and any detected Claude Code session.
+
+            The template is the verb phrase that follows the actor \
+            (e.g. "is signing a commit").
+
+            Check this box if your template names its own subject and the \
+            actor prefix would just be noise.
+            """
+    }
+
     private func makePredicateEditorRow() -> NSView {
         let row = NSStackView()
         row.orientation = .horizontal
@@ -589,22 +652,71 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-    private func commitDetail() {
-        guard let id = selectedRuleID,
-              let idx = store.userRules.firstIndex(where: { $0.id == id }) else {
-            return
-        }
-        // Always update the inline error label, even when the predicate
-        // is invalid — we still persist the broken text so the user's
-        // in-progress edit survives a re-selection, but the engine will
-        // skip the rule until they fix it.
-        let predicateText = predicateView.string
-        if let parseError = PredicateParser.validate(predicateText) {
+    /// Refresh the inline error label against the predicate field's
+    /// current text. Called immediately when a rule is loaded into the
+    /// editor, and from the debouncer when the user pauses typing.
+    private func refreshPredicateErrorLabel() {
+        if let parseError = PredicateParser.validate(predicateView.string) {
             predicateError.stringValue = parseError.localizedDescription
             predicateError.isHidden = false
         } else {
             predicateError.stringValue = ""
             predicateError.isHidden = true
+        }
+    }
+
+    /// Refresh the template preview line with a freshly-picked random
+    /// recent request as context. Re-sampling each fire means a user
+    /// editing a rule sees the template applied to varied real captures
+    /// rather than a single canned example — handy for templates whose
+    /// output depends on the trigger (e.g. {process}, {subcommand}).
+    private func refreshTemplatePreview() {
+        guard let id = selectedRuleID,
+              let rule = store.allRules.first(where: { $0.id == id }) else {
+            templatePreview.stringValue = ""
+            return
+        }
+        let recents = recentStore.requests
+        if recents.isEmpty {
+            templatePreview.stringValue =
+                "Example will appear once op-who detects a request."
+            templatePreview.textColor = .tertiaryLabelColor
+            return
+        }
+        // Templates with placeholders like {plugin_remote} don't render
+        // against every recent; try up to 8 random samples before giving
+        // up so a partly-applicable rule still shows something useful.
+        for recent in recents.shuffled().prefix(8) {
+            if let preview = previewTitle(rule: rule, recent: recent) {
+                templatePreview.stringValue = "e.g. " + preview
+                templatePreview.textColor = .secondaryLabelColor
+                return
+            }
+        }
+        templatePreview.stringValue =
+            "Template can’t be rendered against any recent activity yet."
+        templatePreview.textColor = .tertiaryLabelColor
+    }
+
+    /// Single debouncer fire-point: both UI surfaces that refresh on the
+    /// same quiet-period live here so they always update together.
+    private func performDebouncedEditorRefresh() {
+        refreshPredicateErrorLabel()
+        refreshTemplatePreview()
+    }
+
+    private func commitDetail() {
+        guard let id = selectedRuleID,
+              let idx = store.userRules.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        // Persist the predicate text eagerly — even broken in-progress
+        // input survives a re-selection (the engine just skips rules that
+        // don't parse). Defer the error label update via the debouncer so
+        // it doesn't flash red on every keystroke.
+        let predicateText = predicateView.string
+        predicateErrorDebouncer.schedule { [weak self] in
+            self?.performDebouncedEditorRefresh()
         }
 
         var rule = store.userRules[idx]
@@ -821,13 +933,11 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
         // Surface any parse error on the loaded predicate so the user
         // sees what's wrong without having to type into the field first.
-        if let parseError = PredicateParser.validate(rule.predicate) {
-            predicateError.stringValue = parseError.localizedDescription
-            predicateError.isHidden = false
-        } else {
-            predicateError.stringValue = ""
-            predicateError.isHidden = true
-        }
+        // Cancel any pending debounced refresh first — the new rule's
+        // text is authoritative; a stale callback from the previous
+        // rule's edits would just overwrite our work moments later.
+        predicateErrorDebouncer.cancel()
+        performDebouncedEditorRefresh()
 
         let isBuiltIn = (rule.builtInID != nil)
         setEditable(!isBuiltIn)
@@ -843,6 +953,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         predicateError.stringValue = ""
         predicateError.isHidden = true
         templateField.stringValue = ""
+        templatePreview.stringValue = ""
         commentView.string = ""
         replacesActorCheckbox.state = .off
         isWarningCheckbox.state = .off

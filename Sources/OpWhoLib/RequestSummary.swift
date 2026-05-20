@@ -352,6 +352,34 @@ public func isRemoteGitSubcommand(argv: [String]) -> Bool {
     return networkGitSubcommands.contains(sub)
 }
 
+/// Render `rule` against `recent`'s captured context and produce the
+/// title the overlay would show — including the auto-computed actor
+/// prefix unless `rule.replacesActor` is true. Used by the rules editor
+/// to display a live example of what a draft rule would look like in
+/// the overlay, without going through the full rule engine (the engine
+/// picks whichever rule matches first; the editor wants to preview
+/// *this* rule even when a different one would win).
+///
+/// Returns nil when the template references a placeholder that doesn't
+/// resolve against the recent's context — callers can sample another
+/// recent or fall back to a "no preview" message.
+public func previewTitle(rule: RequestRule, recent: RecentRequest) -> String? {
+    let context = recent.makeMatchContext()
+    guard let rendered = renderTemplate(rule.template, context: context) else {
+        return nil
+    }
+    if rule.replacesActor {
+        return rendered
+    }
+    let actor = describeActor(
+        chain: context.chain,
+        tabTitle: recent.tabTitle,
+        claudeSession: context.claudeSession,
+        terminalBundleID: context.terminalBundleID
+    )
+    return "\(actor) \(rendered)"
+}
+
 // MARK: - Actor / context labels
 //
 // Kind classification and the verb-phrase rendering used to live here; both
