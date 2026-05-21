@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-21
+
+- Added: Rules now use NSPredicate-format expressions — full Boolean logic over trigger fields; all 17 built-ins rewritten.
+- Added: Rule editor with syntax highlighting, keyword and identifier completion, and inline error reporting.
+- Added: Test Predicate window replays the predicate against captured recent requests so you can verify matches before saving.
+- Added: Live template preview renders the draft rule against a random recent request as you type.
+- Added: Tilde expansion in predicate string literals (`triggerCwd BEGINSWITH "~/git/foo"` now matches).
+- Added: `docs/rules.md` walks through the rule format; linked from README.
+- Changed: Settings gains drag handles between the rule list, predicate editor, and detail form; Test Predicate is a free-floating window.
+- Changed: Standard editing shortcuts (Cmd-C/V/X/Z) now work in Settings via an installed Edit menu.
+- Changed: "From recent" rule prefill now populates the cwd-prefix and argv tokens from the picked record.
+- Removed: Old structured-matcher UI replaced by the single predicate editor.
+- Changed: User-authored `rules.json` from 0.6.x will not load — re-author user rules in the new predicate syntax; built-ins still seed normally.
+
 ## [0.6.0] - 2026-05-18
 
 - Added: Configurable rule engine — user-editable rules with matchers and templates override or extend the built-in detectors.
