@@ -87,7 +87,7 @@ final class ConfigWindowController: NSWindowController {
         stack.alignment = .leading
         stack.distribution = .fill
         stack.spacing = 20
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 18, bottom: 18, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let optionsSection = makeOptionsSection()

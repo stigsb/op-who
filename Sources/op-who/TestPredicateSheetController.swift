@@ -1,16 +1,24 @@
 import AppKit
 import OpWhoLib
 
-/// Sheet shown when the user clicks "Test" next to the predicate field.
+/// Window shown when the user clicks "Test" next to the predicate field.
 /// Evaluates the snapshot predicate against every record in the recent-
 /// requests ring buffer and shows match/no-match per record so the user
 /// can verify their predicate against captures they've actually seen
 /// rather than imagined ones.
 ///
+/// Presented as a free-floating NSWindow rather than a sheet so the user
+/// can drag it around to compare against the Settings window — sheets
+/// are pinned to the parent's title bar by HIG and aren't movable.
+///
 /// Snapshots the predicate at construction. Re-testing after an edit is
-/// "close the sheet, edit the predicate, click Test again" — there's
+/// "close the window, edit the predicate, click Test again" — there's
 /// only one canonical predicate field, the one in the rules pane.
-final class TestPredicateSheetController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
+final class TestPredicateSheetController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
+
+    /// Fires once when the window closes — used by the rules pane to
+    /// release its retain on this controller.
+    var onClose: (() -> Void)?
 
     private let recents: [RecentRequest]
     private let predicate: String
@@ -37,11 +45,16 @@ final class TestPredicateSheetController: NSWindowController, NSTableViewDataSou
         window.title = "Test predicate"
         window.minSize = NSSize(width: 720, height: 320)
         super.init(window: window)
+        window.delegate = self
         window.contentView = makeContentView()
         runAndPopulate()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
 
     // MARK: - Layout
 

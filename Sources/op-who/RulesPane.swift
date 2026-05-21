@@ -19,6 +19,18 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     weak var presenter: NSWindow?
 
     private let tableView = NSTableView()
+    private let tableScroll = NSScrollView()
+    /// Drag-handle below the rule list. Lets the user trade height
+    /// between the table (more rules visible) and the detail editor
+    /// (more room for long predicate / template / comment).
+    private let tableResizeGrip = ResizeGripView()
+    /// Height of the rule-list scroll view. Held as a stored constraint
+    /// so the resize grip can mutate it.
+    private var tableScrollHeight: NSLayoutConstraint!
+    /// Minimum height for the rule-list scroll view in points. Floor is
+    /// roughly 3 visible rows so the user can still see what they're
+    /// selecting.
+    private let tableMinHeight: CGFloat = 96
     private var selectedRuleID: UUID? = nil
     private var addSheet: AddRuleSheetController?
     private var testSheet: TestPredicateSheetController?
@@ -30,6 +42,17 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// The subclass extends `rangeForUserCompletion` so dotted keypaths
     /// (e.g. `triggerArgv.@count`) complete as one word.
     private let predicateView = PredicateTextView()
+    /// Drag-handle below the predicate field. Dragging it changes the
+    /// scroll view's height so long predicates have room without taking
+    /// permanent vertical real estate from the rest of the editor.
+    private let predicateResizeGrip = ResizeGripView()
+    /// Height of the predicate scroll view. Held as a stored constraint
+    /// so the resize grip can mutate it.
+    private var predicateScrollHeight: NSLayoutConstraint!
+    /// Minimum height for the predicate scroll view in points. Keeps a
+    /// one-line predicate readable; the user can drag the grip up
+    /// against this floor but not past it.
+    private let predicateMinHeight: CGFloat = 36
     /// Set while `loadDetailFromSelection` is writing the predicate field
     /// programmatically, so the textDidChange notification doesn't
     /// auto-trigger the completion popup on a load.
@@ -116,17 +139,24 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         subhead.lineBreakMode = .byWordWrapping
         subhead.maximumNumberOfLines = 3
 
-        let tableScroll = makeTableScroll()
+        configureTableScroll()
         let buttonBar = makeButtonBar()
         let detail = makeDetailForm()
 
-        for v in [header, subhead, tableScroll, buttonBar, detail] {
+        tableResizeGrip.onDragDelta = { [weak self] delta in
+            guard let self = self else { return }
+            let proposed = self.tableScrollHeight.constant + delta
+            self.tableScrollHeight.constant = max(self.tableMinHeight, proposed)
+        }
+
+        for v in [header, subhead, tableScroll, tableResizeGrip, buttonBar, detail] {
             v.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(v)
         }
 
         let padding: CGFloat = 16
         let spacing: CGFloat = 10
+        tableScrollHeight = tableScroll.heightAnchor.constraint(equalToConstant: 260)
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: padding),
             header.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -padding),
@@ -134,6 +164,8 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             subhead.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -padding),
             tableScroll.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: padding),
             tableScroll.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -padding),
+            tableResizeGrip.leadingAnchor.constraint(equalTo: tableScroll.leadingAnchor),
+            tableResizeGrip.trailingAnchor.constraint(equalTo: tableScroll.trailingAnchor),
             buttonBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: padding),
             buttonBar.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -padding),
             detail.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: padding),
@@ -142,19 +174,19 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             header.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
             subhead.topAnchor.constraint(equalTo: header.bottomAnchor, constant: spacing),
             tableScroll.topAnchor.constraint(equalTo: subhead.bottomAnchor, constant: spacing),
-            buttonBar.topAnchor.constraint(equalTo: tableScroll.bottomAnchor, constant: spacing),
+            tableResizeGrip.topAnchor.constraint(equalTo: tableScroll.bottomAnchor),
+            buttonBar.topAnchor.constraint(equalTo: tableResizeGrip.bottomAnchor, constant: spacing),
             detail.topAnchor.constraint(equalTo: buttonBar.bottomAnchor, constant: spacing),
             detail.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14),
 
-            tableScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260),
+            tableScrollHeight,
         ])
         return container
     }
 
-    private func makeTableScroll() -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+    private func configureTableScroll() {
+        tableScroll.hasVerticalScroller = true
+        tableScroll.borderType = .bezelBorder
 
         tableView.dataSource = self
         tableView.delegate = self
@@ -191,8 +223,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         thenCol.width = 260
         tableView.addTableColumn(thenCol)
 
-        scroll.documentView = tableView
-        return scroll
+        tableScroll.documentView = tableView
     }
 
     private func makeButtonBar() -> NSView {
@@ -364,12 +395,26 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func makePredicateEditorRow() -> NSView {
+        // Editor column: predicate scroll on top, drag grip directly
+        // below. The grip spans the same width so the user can drag from
+        // anywhere along the bottom edge.
+        let editorColumn = NSStackView(views: [predicateScroll, predicateResizeGrip])
+        editorColumn.orientation = .vertical
+        editorColumn.alignment = .leading
+        editorColumn.spacing = 0
+        editorColumn.translatesAutoresizingMaskIntoConstraints = false
+        predicateResizeGrip.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            predicateResizeGrip.leadingAnchor.constraint(equalTo: editorColumn.leadingAnchor),
+            predicateResizeGrip.trailingAnchor.constraint(equalTo: predicateScroll.trailingAnchor),
+        ])
+
         let row = NSStackView()
         row.orientation = .horizontal
         row.alignment = .top
         row.spacing = 6
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.addArrangedSubview(predicateScroll)
+        row.addArrangedSubview(editorColumn)
 
         let testButton = NSButton(title: "Test…", target: self, action: #selector(testPredicate(_:)))
         testButton.toolTip = "Evaluate this predicate against every record in the recent-requests ring buffer"
@@ -395,8 +440,20 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         predicateScroll.hasVerticalScroller = true
         predicateScroll.documentView = predicateView
         predicateScroll.translatesAutoresizingMaskIntoConstraints = false
-        predicateScroll.heightAnchor.constraint(equalToConstant: 72).isActive = true
+        predicateScrollHeight = predicateScroll.heightAnchor.constraint(equalToConstant: 72)
+        predicateScrollHeight.isActive = true
         predicateScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+
+        predicateResizeGrip.onDragDelta = { [weak self] delta in
+            guard let self = self else { return }
+            // NSEvent.deltaY for mouse-tracking events is in *screen*
+            // coordinates — down is positive — regardless of the view's
+            // flipped-ness. Add the delta so dragging down grows the
+            // field. Clamp at `predicateMinHeight` so the editor never
+            // collapses to a zero-row sliver.
+            let proposed = self.predicateScrollHeight.constant + delta
+            self.predicateScrollHeight.constant = max(self.predicateMinHeight, proposed)
+        }
 
         // Install the syntax highlighter on the text storage. The
         // highlighter watches edits and re-applies foreground colours
@@ -638,18 +695,24 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         // saved value) so the user can test a draft they haven't typed
         // through to a stable state yet.
         let snapshot = predicateView.string
+        // Close any previously-open test window so each click runs
+        // against fresh editor contents — the controller snapshots
+        // its inputs at init, so repurposing the existing instance
+        // wouldn't pick up edits.
+        testSheet?.close()
         let sheet = TestPredicateSheetController(
             predicate: snapshot,
             recents: Array(recentStore.requests.reversed())
         )
         self.testSheet = sheet
-        guard let host = presenter, let sheetWindow = sheet.window else {
-            sheet.window?.makeKeyAndOrderFront(nil)
-            return
+        // Present as a free-floating window rather than a sheet so the
+        // user can drag it around to read alongside the Settings window.
+        sheet.onClose = { [weak self, weak sheet] in
+            guard let self = self, self.testSheet === sheet else { return }
+            self.testSheet = nil
         }
-        host.beginSheet(sheetWindow) { [weak self] _ in
-            self?.testSheet = nil
-        }
+        sheet.window?.center()
+        sheet.window?.makeKeyAndOrderFront(nil)
     }
 
     /// Refresh the inline error label against the predicate field's
@@ -1051,6 +1114,47 @@ private final class PredicateTextView: NSTextView {
         }
         let extra = base.location - loc
         return NSRange(location: loc, length: base.length + extra)
+    }
+}
+
+// MARK: - Resize grip
+
+/// Thin drag handle that captures mouse drags and forwards the per-tick
+/// vertical delta to its host. Drawn as three small dots so users
+/// recognise it as a grip — same idiom HTML's resizable textarea uses.
+/// Switches the cursor to the up/down resize cursor while hovered so
+/// affordance is obvious before the click.
+private final class ResizeGripView: NSView {
+
+    /// Called per mouseDragged event with `event.deltaY` (non-flipped
+    /// coords: drag DOWN is negative). The host decides how to apply it
+    /// to whatever constraint it owns.
+    var onDragDelta: ((CGFloat) -> Void)?
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: 8)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .resizeUpDown)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        onDragDelta?(event.deltaY)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.tertiaryLabelColor.setFill()
+        let dotSize: CGFloat = 2
+        let spacing: CGFloat = 4
+        let totalWidth = dotSize * 3 + spacing * 2
+        let startX = bounds.midX - totalWidth / 2
+        let y = bounds.midY - dotSize / 2
+        for i in 0..<3 {
+            let x = startX + CGFloat(i) * (dotSize + spacing)
+            NSBezierPath(ovalIn: NSRect(x: x, y: y, width: dotSize, height: dotSize)).fill()
+        }
     }
 }
 

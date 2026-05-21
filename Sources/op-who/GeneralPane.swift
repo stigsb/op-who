@@ -2,9 +2,12 @@ import AppKit
 import ServiceManagement
 
 /// Options section inside the Settings window. Currently holds just the
-/// "Run on startup" toggle that used to live in the status-bar menu —
-/// kept in its own type so future global toggles can sit alongside it
-/// without reshaping the surrounding layout.
+/// "Run on startup" toggle that used to live in the status-bar menu.
+/// Renders as a bare checkbox — the window's own title bar reads
+/// "op-who Settings", and a section header above a single toggle would
+/// be visual noise. Wrapped in a dedicated type so future global
+/// toggles can be added without reshaping the surrounding layout; the
+/// section header can be reintroduced if more options arrive.
 final class GeneralPane: NSObject {
 
     private let startupCheckbox = NSButton(
@@ -33,37 +36,16 @@ final class GeneralPane: NSObject {
 
     private func makeContentView() -> NSView {
         let container = NSView()
+        startupCheckbox.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(startupCheckbox)
 
-        let header = NSTextField(labelWithString: "Options")
-        header.font = NSFont.boldSystemFont(ofSize: 13)
-
-        let subhead = NSTextField(labelWithString:
-            "Global behavior settings for op-who."
-        )
-        subhead.font = NSFont.systemFont(ofSize: 11)
-        subhead.textColor = .secondaryLabelColor
-
-        for v in [header, subhead, startupCheckbox] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(v)
-        }
-
-        let pad: CGFloat = 16
-        let spacing: CGFloat = 10
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: pad),
-            header.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -pad),
-            subhead.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: pad),
-            subhead.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -pad),
-            startupCheckbox.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: pad),
-
-            header.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
-            subhead.topAnchor.constraint(equalTo: header.bottomAnchor, constant: spacing),
-            startupCheckbox.topAnchor.constraint(equalTo: subhead.bottomAnchor, constant: spacing * 2),
+            startupCheckbox.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            startupCheckbox.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
             // Bottom anchor closes the container's intrinsic content size.
             // Without it, the surrounding NSStackView reads height 0 and
             // packs the next section right on top of this one.
-            startupCheckbox.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
+            startupCheckbox.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4),
         ])
         return container
     }
