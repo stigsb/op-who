@@ -59,6 +59,10 @@ When Apple-notarized builds are available, the install path will move to a Homeb
 | iTerm2 | AppleScript | AppleScript |
 | Ghostty, Warp, others | Accessibility API | App activation |
 
+## Rules
+
+The overlay's one-line description is produced by a configurable rules engine. A default set of built-ins covers common cases (`git push`, `op read`, SSH key signing, Claude plugin update checks, etc.); you can disable any built-in or add your own user rules from Settings. See [docs/rules.md](docs/rules.md) for the rule anatomy, NSPredicate cheatsheet, and worked examples.
+
 ## Security
 
 op-who validates the identity of processes it interacts with:
