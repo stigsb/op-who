@@ -12,7 +12,14 @@ public class OnePasswordWatcher {
     private var trackedDialogElement: AXUIElement?
     private var dialogPollTimer: Timer?
     private var trackedProcessPIDs: Set<pid_t> = []
+    private var windowGoneTickCount: Int = 0
     private let recentStore: RecentRequestsStore?
+
+    /// Number of consecutive 0.5s poll ticks that must report "no approval
+    /// dialog" before we dismiss the overlay. 3 ticks = 1.5s of stability,
+    /// enough to ride out Electron's intermittent AX-element invalidations
+    /// during re-renders without keeping the overlay up after real dismissal.
+    private static let windowGoneTickThreshold: Int = 3
 
     private static let bundleIDs = [
         "com.1password.1password",
@@ -361,12 +368,13 @@ public class OnePasswordWatcher {
 
         let displayedEntries = [chosen.entry]
 
-        // Track *all* surviving candidate PIDs, not just the displayed one.
-        // git/ssh workflows routinely spawn sibling processes (control-master
-        // auth helper + session, fetch-pack + push-pack, etc.) and the one we
-        // pick for display may exit seconds before the one actually waiting
-        // on the user's approval. Dismiss only when every viable trigger has
-        // exited — that's the moment the dialog can plausibly be done.
+        // Track all candidate PIDs (not just the displayed one) so that the
+        // re-entry guard above survives sibling churn between AX re-renders:
+        // git/ssh workflows routinely have multiple processes waiting on the
+        // same approval (control-master + session, fetch-pack + push-pack,
+        // etc.), and the candidate selected for display can shift if one
+        // sibling exits before the next AX fire. Matching on any tracked PID
+        // keeps us pinned to the same logical approval.
         trackedDialogElement = element
         trackedProcessPIDs = Set(candidates.map { $0.entry.pid })
         Log.watcher.debug("tracking pids=\(self.trackedProcessPIDs.sorted(), privacy: .public) displayed=\(chosen.entry.pid, privacy: .public)")
@@ -409,7 +417,10 @@ public class OnePasswordWatcher {
     }
 
     /// Poll to detect when the 1Password dialog closes.
-    /// We check both the AX element validity and whether op processes are still running.
+    /// Dismissal fires when AX consistently reports no approval dialog for
+    /// `windowGoneTickThreshold` consecutive polls. We do *not* gate on the
+    /// trigger process's liveness — for SSH/git workflows the trigger can
+    /// outlive the prompt by minutes or hours.
     private func startDialogPolling() {
         dialogPollTimer?.invalidate()
         dialogPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -422,6 +433,7 @@ public class OnePasswordWatcher {
         dialogPollTimer = nil
         trackedDialogElement = nil
         trackedProcessPIDs = []
+        windowGoneTickCount = 0
     }
 
     private func checkDialogStillOpen() {
@@ -452,26 +464,20 @@ public class OnePasswordWatcher {
             }
         }
 
-        // Check 2: are the triggering processes still running?
-        // Use kill(pid, 0) — sends no signal but returns whether the process exists.
-        let livePIDs = trackedProcessPIDs.filter { kill($0, 0) == 0 }
-        let procsGone = !trackedProcessPIDs.isEmpty && livePIDs.isEmpty
+        // Debounce AX-window-gone. The rescan above re-resolves the live
+        // dialog when the cached reference goes stale; the tick threshold
+        // catches the cases the rescan misses.
+        if windowGone {
+            windowGoneTickCount += 1
+        } else {
+            windowGoneTickCount = 0
+        }
 
-        Log.watcher.debug("poll-tick windowGone=\(windowGone, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public) live=\(livePIDs.sorted(), privacy: .public)")
+        Log.watcher.debug("poll-tick windowGone=\(windowGone, privacy: .public) tickCount=\(self.windowGoneTickCount, privacy: .public)/\(Self.windowGoneTickThreshold, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public)")
 
-        // Dismiss only when *both* signals agree the dialog is over.
-        //
-        // - Process-alive overrides AX-gone: Electron-rendered dialogs
-        //   intermittently invalidate their AX element while remaining visible,
-        //   so a live trigger process means the overlay must stay up.
-        // - AX-alive overrides process-gone: SSH siblings (control-master
-        //   helper + session, fetch-pack + push-pack, etc.) sometimes exit
-        //   while the approval prompt remains on screen waiting on the user.
-        //   If AX still reports the window as valid, trust that — the overlay
-        //   should outlive the trigger processes in that case.
-        guard procsGone && windowGone else { return }
+        guard windowGoneTickCount >= Self.windowGoneTickThreshold else { return }
 
-        Log.watcher.info("Dismissing overlay: windowGone=\(windowGone, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) procsGone=true tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public) live=\(livePIDs.sorted(), privacy: .public)")
+        Log.watcher.info("Dismissing overlay: windowGone for \(self.windowGoneTickCount, privacy: .public) consecutive ticks (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public)")
         DispatchQueue.main.async { [weak self] in
             self?.overlayPanel?.dismiss()
             self?.stopDialogPolling()
