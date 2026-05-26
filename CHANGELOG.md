@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-26
+
+- Fixed: Overlay no longer stays pinned during long-lived SSH sessions after the 1Password prompt is dismissed.
+
 ## [0.7.0] - 2026-05-21
 
 - Added: Rules now use NSPredicate-format expressions — full Boolean logic over trigger fields; all 17 built-ins rewritten.
