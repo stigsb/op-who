@@ -38,6 +38,25 @@ public struct ChainResult {
     public let terminalPID: pid_t?
     public let hasClaudeCode: Bool
     public let claudePID: pid_t?
+    public let scriptInfo: ScriptInfo?
+}
+
+/// What an interpreter in the chain is currently running. `interpreter` is the
+/// short process name (e.g. "python3", "bash"), `scriptName` is something
+/// human-friendly — the script's basename, or a `-c <snippet>` pseudo-name
+/// when the interpreter was invoked with an inline command.
+public struct ScriptInfo: Equatable {
+    public let interpreter: String
+    public let scriptName: String
+    /// Full path to the script when one was named on argv. nil for
+    /// `-c`/`-m`/`-e` invocations.
+    public let scriptPath: String?
+
+    public init(interpreter: String, scriptName: String, scriptPath: String?) {
+        self.interpreter = interpreter
+        self.scriptName = scriptName
+        self.scriptPath = scriptPath
+    }
 }
 
 public enum ProcessTree {
@@ -186,14 +205,147 @@ public enum ProcessTree {
             }
         }
 
+        // Find the closest-to-trigger interpreter in the chain and pull its
+        // script name. Skip the Claude Code node — its argv is a long
+        // bun/cli internal blob, and the Claude Code session label already
+        // covers it more usefully.
+        var scriptInfo: ScriptInfo? = nil
+        for node in chain {
+            if node.pid == claudePID { continue }
+            guard Self.isInterpreter(name: node.name) else { continue }
+            let argv = processArgv(pid: node.pid)
+            if let info = Self.detectScript(interpreter: node.name, argv: argv) {
+                scriptInfo = info
+                break
+            }
+        }
+
         return ChainResult(
             chain: chain,
             tty: tty,
             terminalBundleID: terminalBundleID,
             terminalPID: terminalPID,
             hasClaudeCode: claudePID != nil,
-            claudePID: claudePID
+            claudePID: claudePID,
+            scriptInfo: scriptInfo
         )
+    }
+
+    /// Process names op-who treats as script interpreters. The `node` entry
+    /// covers both vanilla Node and Bun-compiled tools whose helper name
+    /// kinfo reports as "node". Python is matched by prefix to catch
+    /// versioned variants like `python3.12`.
+    private static let interpreterExactNames: Set<String> = [
+        "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh",
+        "ruby", "node", "deno", "bun", "perl", "php",
+        "lua", "luajit", "Rscript",
+    ]
+
+    static func isInterpreter(name: String) -> Bool {
+        if interpreterExactNames.contains(name) { return true }
+        if name.hasPrefix("python") { return true }
+        return false
+    }
+
+    /// Pure parser exposed for tests. Walks `argv` (which includes argv[0])
+    /// and returns the script invocation, or nil for interactive use.
+    ///
+    /// Handles four shapes:
+    ///   * positional script path:          `python deploy.py`
+    ///   * leading flag with argument:      `python -u app.py`
+    ///   * inline command (`-c`/`-e`):      `bash -c 'op signin'`
+    ///   * module form (`-m`, Python):      `python -m mymod`
+    ///
+    /// For shells we treat any bundled short flag containing `c`
+    /// (`-c`, `-lc`, `-ic`, …) as inline-command mode, matching the
+    /// behavior of bash/zsh/sh.
+    static func detectScript(interpreter: String, argv: [String]) -> ScriptInfo? {
+        guard argv.count >= 1 else { return nil }
+        let isShell = shellInterpreterNames.contains(interpreter)
+        let isPython = interpreter == "python" || interpreter.hasPrefix("python")
+
+        var i = 1
+        while i < argv.count {
+            let a = argv[i]
+            if a == "--" { i += 1; break }
+            if !a.hasPrefix("-") { break }
+
+            if isShell, shellFlagIsInlineCommand(a) {
+                let snippet = i + 1 < argv.count ? argv[i + 1] : ""
+                return ScriptInfo(
+                    interpreter: interpreter,
+                    scriptName: "-c " + truncateSnippet(snippet),
+                    scriptPath: nil
+                )
+            }
+            if isPython {
+                if a == "-c" {
+                    let snippet = i + 1 < argv.count ? argv[i + 1] : ""
+                    return ScriptInfo(
+                        interpreter: interpreter,
+                        scriptName: "-c " + truncateSnippet(snippet),
+                        scriptPath: nil
+                    )
+                }
+                if a == "-m" {
+                    guard i + 1 < argv.count else { return nil }
+                    return ScriptInfo(
+                        interpreter: interpreter,
+                        scriptName: "-m " + argv[i + 1],
+                        scriptPath: nil
+                    )
+                }
+                if a == "-W" || a == "-X" {
+                    i += 2
+                    continue
+                }
+            }
+            if (interpreter == "perl" || interpreter == "ruby") && (a == "-e" || a == "-E") {
+                let snippet = i + 1 < argv.count ? argv[i + 1] : ""
+                return ScriptInfo(
+                    interpreter: interpreter,
+                    scriptName: "-e " + truncateSnippet(snippet),
+                    scriptPath: nil
+                )
+            }
+            if interpreter == "node",
+               a == "-e" || a == "--eval" || a == "-p" || a == "--print" {
+                let snippet = i + 1 < argv.count ? argv[i + 1] : ""
+                return ScriptInfo(
+                    interpreter: interpreter,
+                    scriptName: "-e " + truncateSnippet(snippet),
+                    scriptPath: nil
+                )
+            }
+            i += 1
+        }
+
+        guard i < argv.count else { return nil }
+        let path = argv[i]
+        guard !path.isEmpty else { return nil }
+        let basename = (path as NSString).lastPathComponent
+        return ScriptInfo(
+            interpreter: interpreter,
+            scriptName: basename.isEmpty ? path : basename,
+            scriptPath: path
+        )
+    }
+
+    private static let shellInterpreterNames: Set<String> =
+        ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
+
+    /// True for short flag bundles whose semantics include `-c`
+    /// (`-c`, `-lc`, `-ic`, `-cl`, …). Long flags (`--foo`) are out.
+    private static func shellFlagIsInlineCommand(_ flag: String) -> Bool {
+        guard flag.hasPrefix("-"), !flag.hasPrefix("--") else { return false }
+        return flag.dropFirst().contains("c")
+    }
+
+    /// Trim an inline-command snippet for overlay display. Keep the head
+    /// because that's the part with the actual command name.
+    private static func truncateSnippet(_ s: String, limit: Int = 40) -> String {
+        if s.count <= limit { return s }
+        return String(s.prefix(limit)) + "…"
     }
 
     /// Format a process chain as a compact display string.

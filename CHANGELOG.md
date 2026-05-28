@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added: Overlay names the script driving the trigger when a shell or interpreter is in the chain (e.g. `python deploy.py`).
+
 ## [0.7.1] - 2026-05-26
 
 - Fixed: Overlay no longer stays pinned during long-lived SSH sessions after the 1Password prompt is dismissed.

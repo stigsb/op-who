@@ -45,6 +45,7 @@ public func makeRequestSummary(
     triggerArgv: [String] = [],
     tabTitle: String?,
     claudeSession: String?,
+    scriptInfo: ScriptInfo? = nil,
     terminalBundleID: String?,
     cwd: String?,
     triggerCwd: String? = nil,
@@ -110,6 +111,11 @@ public func makeRequestSummary(
            !actor.contains("’\(claudeSession)’") {
             // Subtitle echoes the session only if the title didn't already name it.
             subtitleParts.append("session: \(claudeSession)")
+        }
+        // Surface the interpreter script when we have one and Claude isn't
+        // already the actor (Claude's session label is the richer signal).
+        if claudeSession == nil, let s = scriptInfo {
+            subtitleParts.append("\(s.interpreter): \(s.scriptName)")
         }
         if let term = humanTerminalName(bundleID: terminalBundleID),
            !actor.contains(term) {

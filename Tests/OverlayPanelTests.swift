@@ -20,6 +20,7 @@ struct OverlayPanelTerminalRowTextTests {
             tabShortcut: tabShortcut,
             claudeSession: nil,
             claudeContext: nil,
+            scriptInfo: nil,
             terminalBundleID: terminalBundleID,
             terminalPID: nil,
             cwd: nil,

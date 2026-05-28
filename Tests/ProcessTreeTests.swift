@@ -118,3 +118,234 @@ struct ProcessTreeTests {
         #expect(ProcessTree.sessionName(fromCWD: "") == nil)
     }
 }
+
+@Suite("ProcessTree.detectScript")
+struct DetectScriptTests {
+
+    @Test func interpreterRecognitionExact() {
+        for name in ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh",
+                     "ruby", "node", "deno", "bun", "perl", "php",
+                     "lua", "luajit", "Rscript"] {
+            #expect(ProcessTree.isInterpreter(name: name), "expected \(name) to be an interpreter")
+        }
+    }
+
+    @Test func interpreterRecognitionPythonVariants() {
+        #expect(ProcessTree.isInterpreter(name: "python"))
+        #expect(ProcessTree.isInterpreter(name: "python2"))
+        #expect(ProcessTree.isInterpreter(name: "python3"))
+        #expect(ProcessTree.isInterpreter(name: "python3.11"))
+        #expect(ProcessTree.isInterpreter(name: "python3.12"))
+        #expect(ProcessTree.isInterpreter(name: "python3.13"))
+    }
+
+    @Test func detectScriptHandlesVersionedPythonName() {
+        // p_comm for /opt/homebrew/bin/python3.11 lands as "python3.11" in
+        // kinfo_proc — ensure the prefix gate keeps Python flag rules active.
+        let info = ProcessTree.detectScript(
+            interpreter: "python3.11",
+            argv: ["python3.11", "-u", "/Users/x/work/app.py"]
+        )
+        #expect(info?.interpreter == "python3.11")
+        #expect(info?.scriptName == "app.py")
+
+        let inline = ProcessTree.detectScript(
+            interpreter: "python3.11",
+            argv: ["python3.11", "-c", "print('hi')"]
+        )
+        #expect(inline?.scriptName == "-c print('hi')")
+
+        let mod = ProcessTree.detectScript(
+            interpreter: "python3.11",
+            argv: ["python3.11", "-m", "http.server"]
+        )
+        #expect(mod?.scriptName == "-m http.server")
+    }
+
+    @Test func interpreterRecognitionRejectsRandomNames() {
+        #expect(!ProcessTree.isInterpreter(name: "ssh"))
+        #expect(!ProcessTree.isInterpreter(name: "git"))
+        #expect(!ProcessTree.isInterpreter(name: "op"))
+        #expect(!ProcessTree.isInterpreter(name: "claude"))
+        #expect(!ProcessTree.isInterpreter(name: ""))
+    }
+
+    @Test func pythonPositionalScript() {
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "deploy.py"]
+        )
+        #expect(info?.scriptName == "deploy.py")
+        #expect(info?.scriptPath == "deploy.py")
+        #expect(info?.interpreter == "python3")
+    }
+
+    @Test func pythonScriptWithFullPathReturnsBasename() {
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["/usr/bin/python3", "/Users/x/work/app.py"]
+        )
+        #expect(info?.scriptName == "app.py")
+        #expect(info?.scriptPath == "/Users/x/work/app.py")
+    }
+
+    @Test func pythonScriptAfterUnbufferedFlag() {
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "-u", "/Users/x/work/app.py"]
+        )
+        #expect(info?.scriptName == "app.py")
+        #expect(info?.scriptPath == "/Users/x/work/app.py")
+    }
+
+    @Test func pythonInlineCommand() {
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "-c", "print('hi')"]
+        )
+        #expect(info?.scriptName == "-c print('hi')")
+        #expect(info?.scriptPath == nil)
+    }
+
+    @Test func pythonInlineCommandTruncated() {
+        let long = String(repeating: "a", count: 80)
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "-c", long]
+        )
+        // 40 chars of body + ellipsis, prefixed by "-c "
+        #expect(info?.scriptName.hasPrefix("-c " + String(repeating: "a", count: 40)) == true)
+        #expect(info?.scriptName.hasSuffix("…") == true)
+    }
+
+    @Test func pythonModuleForm() {
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "-m", "http.server"]
+        )
+        #expect(info?.scriptName == "-m http.server")
+        #expect(info?.scriptPath == nil)
+    }
+
+    @Test func pythonSkipsArgvOfWAndXFlags() {
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "-W", "ignore", "-X", "utf8", "script.py"]
+        )
+        #expect(info?.scriptName == "script.py")
+    }
+
+    @Test func bashScriptPositional() {
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "run.sh"]
+        )
+        #expect(info?.scriptName == "run.sh")
+    }
+
+    @Test func bashInlineDashC() {
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", "op signin"]
+        )
+        #expect(info?.scriptName == "-c op signin")
+        #expect(info?.scriptPath == nil)
+    }
+
+    @Test func bashLoginInlineDashLC() {
+        // bash -lc 'op signin' — the login-shell + command-string combo
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-lc", "op signin"]
+        )
+        #expect(info?.scriptName == "-c op signin")
+    }
+
+    @Test func zshInlineDashC() {
+        let info = ProcessTree.detectScript(
+            interpreter: "zsh",
+            argv: ["zsh", "-c", "echo hi"]
+        )
+        #expect(info?.scriptName == "-c echo hi")
+    }
+
+    @Test func shNoArgsReturnsNil() {
+        let info = ProcessTree.detectScript(
+            interpreter: "sh",
+            argv: ["sh"]
+        )
+        #expect(info == nil)
+    }
+
+    @Test func bashInteractiveDashIReturnsNil() {
+        // bash -i with no command/script is interactive — no script name
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-i"]
+        )
+        #expect(info == nil)
+    }
+
+    @Test func rubyPositional() {
+        let info = ProcessTree.detectScript(
+            interpreter: "ruby",
+            argv: ["ruby", "test.rb"]
+        )
+        #expect(info?.scriptName == "test.rb")
+    }
+
+    @Test func rubyDashEInline() {
+        let info = ProcessTree.detectScript(
+            interpreter: "ruby",
+            argv: ["ruby", "-e", "puts 1"]
+        )
+        #expect(info?.scriptName == "-e puts 1")
+    }
+
+    @Test func nodePositional() {
+        let info = ProcessTree.detectScript(
+            interpreter: "node",
+            argv: ["node", "app.js"]
+        )
+        #expect(info?.scriptName == "app.js")
+    }
+
+    @Test func nodeFullPathToScript() {
+        let info = ProcessTree.detectScript(
+            interpreter: "node",
+            argv: ["/opt/homebrew/bin/node", "/Users/x/main.mjs"]
+        )
+        #expect(info?.scriptName == "main.mjs")
+        #expect(info?.scriptPath == "/Users/x/main.mjs")
+    }
+
+    @Test func nodeDashEEval() {
+        let info = ProcessTree.detectScript(
+            interpreter: "node",
+            argv: ["node", "-e", "console.log(1)"]
+        )
+        #expect(info?.scriptName == "-e console.log(1)")
+    }
+
+    @Test func perlDashE() {
+        let info = ProcessTree.detectScript(
+            interpreter: "perl",
+            argv: ["perl", "-e", "print 'hi'"]
+        )
+        #expect(info?.scriptName == "-e print 'hi'")
+    }
+
+    @Test func doubleDashEndsFlagSection() {
+        // python3 -- script-named-like-flag.py
+        let info = ProcessTree.detectScript(
+            interpreter: "python3",
+            argv: ["python3", "--", "-weird.py"]
+        )
+        #expect(info?.scriptName == "-weird.py")
+    }
+
+    @Test func emptyArgvReturnsNil() {
+        let info = ProcessTree.detectScript(interpreter: "python3", argv: [])
+        #expect(info == nil)
+    }
+}

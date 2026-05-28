@@ -12,6 +12,34 @@ private func node(_ name: String, pid: pid_t = 100, verified: Bool = false) -> P
 @Suite("RequestSummary")
 struct RequestSummaryTests {
 
+    @Test func scriptInfoSurfaceInSubtitleWhenNotClaude() {
+        let chain = [node("op", verified: true), node("python3"), node("zsh")]
+        let s = makeRequestSummary(
+            chain: chain, tabTitle: nil,
+            claudeSession: nil,
+            scriptInfo: ScriptInfo(
+                interpreter: "python3", scriptName: "deploy.py", scriptPath: "/tmp/deploy.py"
+            ),
+            terminalBundleID: nil, cwd: nil
+        )
+        #expect(s.subtitle?.contains("python3: deploy.py") == true)
+    }
+
+    @Test func scriptInfoSuppressedWhenClaudeIsActor() {
+        let chain = [node("op", verified: true), node("claude"), node("zsh")]
+        let s = makeRequestSummary(
+            chain: chain, tabTitle: nil,
+            claudeSession: "op-who",
+            scriptInfo: ScriptInfo(
+                interpreter: "node", scriptName: "cli.mjs", scriptPath: nil
+            ),
+            terminalBundleID: nil, cwd: nil
+        )
+        // Claude's session label wins — the (suppressed) script must not leak in.
+        #expect(s.subtitle?.contains("cli.mjs") != true)
+        #expect(s.subtitle?.contains("node:") != true)
+    }
+
     @Test func opVerifiedFromClaude() {
         let chain = [node("op", verified: true), node("claude"), node("zsh")]
         let s = makeRequestSummary(

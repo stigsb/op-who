@@ -14,6 +14,10 @@ class OverlayPanel {
         let tabShortcut: String?
         let claudeSession: String?
         let claudeContext: ClaudeContext?
+        /// Closest-to-trigger interpreter + script, when one was detected
+        /// (`python deploy.py`, `bash -c 'op signin'`, …). Suppressed when
+        /// Claude Code is in the chain — its own session label is richer.
+        let scriptInfo: ScriptInfo?
         let terminalBundleID: String?
         let terminalPID: pid_t?
         let cwd: String?
@@ -457,17 +461,26 @@ class OverlayPanel {
         case .shell:  color = .labelColor;   weight = .medium
         case .other:  color = .labelColor;   weight = .medium
         }
-        // Append the requesting process's cwd in a subdued color. Skips "/"
-        // (which means we never found a meaningful directory in the chain).
-        let cwdSuffix: String? = {
-            guard let c = entry.cwd, c != "/", !c.isEmpty else { return nil }
-            return c
+        // Append the script name (when an interpreter is in the chain) and
+        // the requesting process's cwd in a subdued color. Skips "/" CWDs
+        // (which means we never found a meaningful directory). The script
+        // is suppressed when Claude Code is the actor — its session label
+        // already carries the project context.
+        let dimSuffix: String? = {
+            var parts: [String] = []
+            if entry.claudeSession == nil, let s = entry.scriptInfo {
+                parts.append(s.scriptName)
+            }
+            if let c = entry.cwd, c != "/", !c.isEmpty {
+                parts.append(c)
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }()
         return makeIconRow(
             icon: appIcon(bundleID: info.bundleID),
             text: info.text,
             size: 12, weight: weight, color: color,
-            dimSuffix: cwdSuffix
+            dimSuffix: dimSuffix
         )
     }
 
@@ -576,6 +589,11 @@ class OverlayPanel {
 
         if let cwd = entry.cwd {
             lines.append("cwd: \(cwd)")
+        }
+        if let s = entry.scriptInfo {
+            var line = "script: \(s.interpreter) \(s.scriptName)"
+            if let p = s.scriptPath, p != s.scriptName { line += " (\(p))" }
+            lines.append(line)
         }
         if !entry.triggerArgv.isEmpty {
             lines.append("argv: \(entry.triggerArgv.joined(separator: " "))")
