@@ -419,10 +419,12 @@ public class OnePasswordWatcher {
     }
 
     /// Poll to detect when the 1Password dialog closes.
-    /// Dismissal fires when AX consistently reports no approval dialog for
-    /// `windowGoneTickThreshold` consecutive polls. We do *not* gate on the
-    /// trigger process's liveness — for SSH/git workflows the trigger can
-    /// outlive the prompt by minutes or hours.
+    /// Dismissal fires when *either* the tracked AX window has reported gone for
+    /// `windowGoneTickThreshold` consecutive polls *or* every tracked trigger
+    /// process has exited; see `shouldDismiss` for the exact policy. For
+    /// long-lived SSH/git flows the trigger stays alive while the prompt is open,
+    /// so only the AX debounce applies there — which is why liveness is an OR
+    /// signal rather than the sole signal.
     private func startDialogPolling() {
         dialogPollTimer?.invalidate()
         dialogPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -436,6 +438,34 @@ public class OnePasswordWatcher {
         trackedDialogElement = nil
         trackedProcessPIDs = []
         windowGoneTickCount = 0
+    }
+
+    /// Pure decision for whether to dismiss the overlay, given the current
+    /// poll-tick observations. Keeping this free of AX calls and instance
+    /// state makes the dismissal policy directly testable.
+    ///
+    /// Dismiss when *either*:
+    ///   - the tracked AX window has reported gone for `threshold` consecutive
+    ///     ticks (debounces Electron's intermittent AX-element invalidations), or
+    ///   - every tracked trigger process has exited. The trigger for some
+    ///     workflows (e.g. `op-ssh-sign` during commit signing) exits the
+    ///     instant the user approves/denies, so process-liveness is a reliable
+    ///     dismissal signal even when op-who latched onto a still-open
+    ///     1Password window (e.g. the main window) that never goes AX-gone.
+    ///
+    /// The returned `newTickCount` carries the updated debounce counter so the
+    /// caller can persist it; tick-count update logic lives here for coverage.
+    static func shouldDismiss(
+        windowGone: Bool,
+        tickCount: Int,
+        threshold: Int,
+        trackedPIDsNonEmpty: Bool,
+        allTrackedPIDsDead: Bool
+    ) -> (dismiss: Bool, newTickCount: Int) {
+        let newTickCount = windowGone ? tickCount + 1 : 0
+        let windowGoneSignal = newTickCount >= threshold
+        let procsGoneSignal = trackedPIDsNonEmpty && allTrackedPIDsDead
+        return (windowGoneSignal || procsGoneSignal, newTickCount)
     }
 
     private func checkDialogStillOpen() {
@@ -466,20 +496,35 @@ public class OnePasswordWatcher {
             }
         }
 
-        // Debounce AX-window-gone. The rescan above re-resolves the live
-        // dialog when the cached reference goes stale; the tick threshold
-        // catches the cases the rescan misses.
-        if windowGone {
-            windowGoneTickCount += 1
-        } else {
-            windowGoneTickCount = 0
-        }
+        // Check 2: are the triggering processes still running?
+        // Use kill(pid, 0) — sends no signal but returns whether the process
+        // exists. Some triggers (e.g. op-ssh-sign during commit signing) exit
+        // the instant the user approves, giving a reliable dismissal signal
+        // even when op-who latched onto a 1Password window that never goes
+        // AX-gone (e.g. the main window).
+        let livePIDs = trackedProcessPIDs.filter { kill($0, 0) == 0 }
+        let allTrackedPIDsDead = livePIDs.isEmpty
+        let procsGone = !trackedProcessPIDs.isEmpty && allTrackedPIDsDead
 
-        Log.watcher.debug("poll-tick windowGone=\(windowGone, privacy: .public) tickCount=\(self.windowGoneTickCount, privacy: .public)/\(Self.windowGoneTickThreshold, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public)")
+        // Debounce AX-window-gone and combine with process-liveness. The
+        // rescan above re-resolves the live dialog when the cached reference
+        // goes stale; the tick threshold catches the cases the rescan misses;
+        // procsGone catches the cases where the tracked window never goes
+        // AX-gone. Either signal dismisses.
+        let decision = Self.shouldDismiss(
+            windowGone: windowGone,
+            tickCount: windowGoneTickCount,
+            threshold: Self.windowGoneTickThreshold,
+            trackedPIDsNonEmpty: !trackedProcessPIDs.isEmpty,
+            allTrackedPIDsDead: allTrackedPIDsDead
+        )
+        windowGoneTickCount = decision.newTickCount
 
-        guard windowGoneTickCount >= Self.windowGoneTickThreshold else { return }
+        Log.watcher.debug("poll-tick windowGone=\(windowGone, privacy: .public) tickCount=\(self.windowGoneTickCount, privacy: .public)/\(Self.windowGoneTickThreshold, privacy: .public) (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) procsGone=\(procsGone, privacy: .public) livePIDs=\(livePIDs.sorted(), privacy: .public) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public)")
 
-        Log.watcher.info("Dismissing overlay: windowGone for \(self.windowGoneTickCount, privacy: .public) consecutive ticks (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public)")
+        guard decision.dismiss else { return }
+
+        Log.watcher.info("Dismissing overlay: windowGone for \(self.windowGoneTickCount, privacy: .public) consecutive ticks (initialAXErr=\(initialAXErr.rawValue, privacy: .public), rescan=\(rescanOutcome, privacy: .public)) procsGone=\(procsGone, privacy: .public) livePIDs=\(livePIDs.sorted(), privacy: .public) tracked=\(self.trackedProcessPIDs.sorted(), privacy: .public)")
         DispatchQueue.main.async { [weak self] in
             self?.overlayPanel?.dismiss()
             self?.stopDialogPolling()
