@@ -280,7 +280,13 @@ public class OnePasswordWatcher {
                 cmuxTabID = env["CMUX_TAB_ID"]
                 Log.cmux.info("trigger pid=\(triggerPID, privacy: .public) tty=\(result.tty ?? "<nil>", privacy: .public) CMUX_WORKSPACE_ID=\(cmuxWorkspaceID ?? "<unset>", privacy: .public) CMUX_TAB_ID=\(cmuxTabID ?? "<unset>", privacy: .public)")
                 if let tty = result.tty {
-                    cmuxSurface = measure("cmuxSurfaceInfo[\(tty)]") { CmuxHelper.surfaceInfo(forTTY: tty) }
+                    // Pass the trigger's RAW absolute CWD (not the tidied
+                    // ~/-form): cmux records panel directories as absolute
+                    // paths, and we need them to disambiguate panels that
+                    // share a recycled tty device.
+                    cmuxSurface = measure("cmuxSurfaceInfo[\(tty)]") {
+                        CmuxHelper.surfaceInfo(forTTY: tty, triggerCWD: triggerCWD)
+                    }
                 } else {
                     Log.cmux.info("trigger has no TTY — skipping cmux surface lookup")
                 }
