@@ -59,6 +59,22 @@ swift test
 
 Tests use Swift Testing (`import Testing`). Covers pure logic: ProcessNode display names, chain formatting, path tidying, TTY validation, process enumeration.
 
+### Running tests without full Xcode
+
+With only the Command Line Tools installed (no `Xcode.app`), `swift test` fails — first with `no such module 'Testing'`, then, once the framework search path is supplied, with a `dlopen` failure for `@rpath/lib_TestingInterop.dylib`. The swift-testing framework ships with the CLT but isn't on the default import/rpath search paths. Point the compiler and linker at it:
+
+```bash
+FW=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+INTEROP=/Library/Developer/CommandLineTools/Library/Developer/usr/lib
+swift test \
+  -Xswiftc -F -Xswiftc "$FW" \
+  -Xlinker -F -Xlinker "$FW" \
+  -Xlinker -rpath -Xlinker "$FW" \
+  -Xlinker -rpath -Xlinker "$INTEROP"
+```
+
+`Testing.framework` lives under `$FW`; `lib_TestingInterop.dylib` (which the framework dlopens at load time) lives under `$INTEROP` — both directories must be on the runtime rpath. CI runs on `macos-latest` with full Xcode, so plain `swift test` works there and this workaround is only needed for local CLT-only setups.
+
 ## Releasing
 
 A release flows through four steps: cut a signed tag, push, build local artifacts, upload + publish. Until a Developer ID Application certificate is in place, releases are self-signed dev builds anchored at `https://github.com/stigsb.keys` — see [SIGNING.md](SIGNING.md) for the trust model.

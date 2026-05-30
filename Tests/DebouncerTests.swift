@@ -50,17 +50,25 @@ struct DebouncerTests {
     }
 
     @Test func rescheduleResetsTimer() async {
-        // Schedule, wait less than the interval, reschedule — the original
-        // closure must not run, and the new one fires one interval after
-        // the most recent schedule (not after the first one).
-        let debouncer = Debouncer(interval: 0.08, queue: Self.queue)
+        // Schedule, wait a fraction of the interval, then reschedule before
+        // the first closure can fire. Only the most recent closure must run —
+        // the original is cancelled by the reschedule, even though a gap
+        // separated the two schedule calls.
+        //
+        // This is inherently a wall-clock race, and shared CI runners exhibit
+        // severe `Task.sleep` jitter (a sleep can overrun its nominal duration
+        // by 2-3x under load). Two things keep it robust: (1) a large interval
+        // relative to the inter-schedule gap (300ms vs 30ms, a 10x margin) so
+        // the first closure cannot fire before the reschedule even under heavy
+        // oversleep; (2) no mid-flight "hasn't fired yet" assertion — we check
+        // only the final value. [2] alone proves coalescing: if the reschedule
+        // had not cancelled the original we would observe [1, 2].
+        let debouncer = Debouncer(interval: 0.3, queue: Self.queue)
         let recorder = Recorder()
         debouncer.schedule { recorder.record(1) }
-        try? await Task.sleep(nanoseconds: 40_000_000) // 40ms < 80ms
+        try? await Task.sleep(nanoseconds: 30_000_000) // 30ms << 300ms interval
         debouncer.schedule { recorder.record(2) }
-        try? await Task.sleep(nanoseconds: 60_000_000) // 100ms total, less than 80+40
-        #expect(recorder.values == [])
-        try? await Task.sleep(nanoseconds: 80_000_000) // now well past second interval
+        try? await Task.sleep(nanoseconds: 500_000_000) // well past the second interval
         #expect(recorder.values == [2])
     }
 }

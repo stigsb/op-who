@@ -9,6 +9,10 @@ public struct CmuxSurfaceInfo: Equatable {
     public let surfaceTitle: String              // raw cmux surface title
     public let surfaceType: String               // "terminal", "browser", etc.
     public let tty: String                       // bare ttysNN (no /dev/ prefix)
+    /// Absolute working directory of the panel as recorded by cmux, used to
+    /// disambiguate panels that share a recycled tty device. nil when cmux
+    /// didn't record one.
+    public let directory: String?
     /// 1-based workspace position within its window; matches cmux's ⌘N
     /// keyboard shortcut. 0 when unknown.
     public let workspaceIndex: Int
@@ -28,6 +32,7 @@ public struct CmuxSurfaceInfo: Equatable {
         surfaceTitle: String,
         surfaceType: String = "terminal",
         tty: String,
+        directory: String? = nil,
         workspaceIndex: Int = 0,
         tabIndex: Int = 0,
         workspaceTabCount: Int = 0
@@ -39,6 +44,7 @@ public struct CmuxSurfaceInfo: Equatable {
         self.surfaceTitle = surfaceTitle
         self.surfaceType = surfaceType
         self.tty = tty
+        self.directory = directory
         self.workspaceIndex = workspaceIndex
         self.tabIndex = tabIndex
         self.workspaceTabCount = workspaceTabCount
@@ -60,17 +66,73 @@ public enum CmuxHelper {
     /// state file. Returns nil if the file is unreadable or no terminal panel
     /// matches the TTY. Cached briefly so multiple lookups in one dialog
     /// reuse a single file read.
-    public static func surfaceInfo(forTTY tty: String) -> CmuxSurfaceInfo? {
+    ///
+    /// cmux can leave MULTIPLE panels carrying the same tty device (numbers get
+    /// recycled; stale entries linger). When that happens we disambiguate by
+    /// the trigger's working directory: the right panel is the one the shell is
+    /// actually inside. With no usable CWD — or no panel directory matching it —
+    /// we return nil rather than guess, because showing the wrong workspace is
+    /// worse than showing none.
+    public static func surfaceInfo(forTTY tty: String, triggerCWD: String? = nil) -> CmuxSurfaceInfo? {
         let bare = tty.hasPrefix("/dev/") ? String(tty.dropFirst("/dev/".count)) : tty
-        let map = cachedMap()
-        let hit = map?[bare]
-        if hit == nil {
+        let map = groupedMap()
+        let candidates = map?[bare] ?? []
+
+        if candidates.isEmpty {
             let keys = map?.keys.sorted().joined(separator: ",") ?? "<nil-map>"
             Log.cmux.info("surfaceInfo MISS tty=\(bare, privacy: .public) map_size=\(map?.count ?? -1, privacy: .public) keys=\(keys, privacy: .public)")
-        } else {
-            Log.cmux.info("surfaceInfo HIT  tty=\(bare, privacy: .public) ws=\(hit!.workspaceTitle, privacy: .public) surface=\(hit!.surfaceTitle, privacy: .public)")
+            return nil
         }
-        return hit
+
+        if candidates.count == 1 {
+            let hit = candidates[0]
+            Log.cmux.info("surfaceInfo HIT  tty=\(bare, privacy: .public) ws=\(hit.workspaceTitle, privacy: .public) surface=\(hit.surfaceTitle, privacy: .public)")
+            return hit
+        }
+
+        // Multiple panels share this tty — disambiguate by CWD.
+        guard let cwd = triggerCWD else {
+            Log.cmux.info("surfaceInfo MISS tty=\(bare, privacy: .public) candidates=\(candidates.count, privacy: .public) reason=no-cwd")
+            return nil
+        }
+
+        // ProcessTree.processCWD returns symlink-resolved paths (e.g.
+        // /private/var/...) while cmux's panel.directory is typically unresolved
+        // (/var/...). Normalize both sides so the comparison is apples-to-apples.
+        let normalizedCWD = normalizePath(cwd)
+
+        // Among panels whose directory is the CWD or a path-prefix of it,
+        // prefer the most specific (longest) directory.
+        let matches = candidates
+            .filter { panel in
+                guard let dir = panel.directory, !dir.isEmpty else { return false }
+                return pathContains(normalizePath(dir), normalizedCWD)
+            }
+            .sorted { ($0.directory?.count ?? 0) > ($1.directory?.count ?? 0) }
+
+        guard let chosen = matches.first else {
+            Log.cmux.info("surfaceInfo MISS tty=\(bare, privacy: .public) candidates=\(candidates.count, privacy: .public) cwd=\(cwd, privacy: .public) reason=no-dir-match")
+            return nil
+        }
+
+        Log.cmux.info("surfaceInfo HIT  tty=\(bare, privacy: .public) candidates=\(candidates.count, privacy: .public) chosen_ws=\(chosen.workspaceTitle, privacy: .public) chosen_dir=\(chosen.directory ?? "<nil>", privacy: .public) cwd=\(cwd, privacy: .public)")
+        return chosen
+    }
+
+    /// True when `child` is equal to `parent` or lives beneath it, compared by
+    /// whole path components so `/a/b` contains `/a/b/c` but NOT `/a/bc`.
+    static func pathContains(_ parent: String, _ child: String) -> Bool {
+        if parent == child { return true }
+        let p = parent.hasSuffix("/") ? parent : parent + "/"
+        return child.hasPrefix(p)
+    }
+
+    /// Resolves symlinks so the resolved and unresolved forms of the same
+    /// directory compare equal (e.g. /var/x ↔ /private/var/x). Note:
+    /// `resolvingSymlinksInPath` hits the filesystem and only resolves paths that
+    /// exist — fine here, these are live working directories.
+    static func normalizePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
     /// Parse the raw bytes of cmux's session JSON file
@@ -87,10 +149,21 @@ public enum CmuxHelper {
     /// file, by contrast, is a plain JSON written by cmux on every state
     /// change and readable by any same-user process.
     public static func parseSessionFile(_ data: Data) -> [String: CmuxSurfaceInfo] {
+        // Flat (last-writer-wins) view, kept for back-compat with callers/tests
+        // that don't care about tty collisions.
+        parseSessionFileGrouped(data).reduce(into: [:]) { acc, kv in
+            if let last = kv.value.last { acc[kv.key] = last }
+        }
+    }
+
+    /// Like `parseSessionFile`, but groups all panels that share a bare tty so
+    /// collisions can be disambiguated downstream. Insertion order within each
+    /// bucket follows window → workspace → panel iteration order.
+    public static func parseSessionFileGrouped(_ data: Data) -> [String: [CmuxSurfaceInfo]] {
         guard let session = try? JSONDecoder().decode(SessionJSON.self, from: data) else {
             return [:]
         }
-        var map: [String: CmuxSurfaceInfo] = [:]
+        var map: [String: [CmuxSurfaceInfo]] = [:]
         for (wi, window) in session.windows.enumerated() {
             for (wsi, ws) in window.tabManager.workspaces.enumerated() {
                 // Workspace title preference: customTitle (user-set) wins.
@@ -115,7 +188,7 @@ public enum CmuxHelper {
                     guard panel.type == "terminal",
                           let tty = nonEmpty(panel.ttyName) else { continue }
                     let bare = tty.hasPrefix("/dev/") ? String(tty.dropFirst("/dev/".count)) : tty
-                    map[bare] = CmuxSurfaceInfo(
+                    map[bare, default: []].append(CmuxSurfaceInfo(
                         workspaceRef: wsRef,
                         workspaceTitle: wsTitle,
                         workspaceDescription: wsDesc,
@@ -123,10 +196,11 @@ public enum CmuxHelper {
                         surfaceTitle: panel.title ?? "",
                         surfaceType: panel.type,
                         tty: bare,
+                        directory: nonEmpty(panel.directory),
                         workspaceIndex: wsi + 1,
                         tabIndex: pi + 1,
                         workspaceTabCount: panelCount
-                    )
+                    ))
                 }
             }
         }
@@ -136,6 +210,11 @@ public enum CmuxHelper {
     /// Convenience for tests: parse a JSON string.
     public static func parseSessionFile(_ json: String) -> [String: CmuxSurfaceInfo] {
         parseSessionFile(Data(json.utf8))
+    }
+
+    /// Convenience for tests: parse a JSON string into the grouped form.
+    public static func parseSessionFileGrouped(_ json: String) -> [String: [CmuxSurfaceInfo]] {
+        parseSessionFileGrouped(Data(json.utf8))
     }
 
     /// True when the title is empty or one of cmux's auto-generated
@@ -176,25 +255,32 @@ public enum CmuxHelper {
             let title: String?
             let ttyName: String?
             let type: String
+            let directory: String?
         }
     }
 
     // MARK: - File caching
 
-    private static var cacheValue: [String: CmuxSurfaceInfo]?
+    private static var cacheValue: [String: [CmuxSurfaceInfo]]?
     private static var cacheTime: Date = .distantPast
     private static let cacheTTL: TimeInterval = 1.0
     private static let cacheLock = NSLock()
+    /// Test override: when set, lookups use this map and skip the file read.
+    private static var testMap: [String: [CmuxSurfaceInfo]]?
 
-    private static func cachedMap() -> [String: CmuxSurfaceInfo]? {
+    private static func groupedMap() -> [String: [CmuxSurfaceInfo]]? {
         cacheLock.lock()
+        if let testMap = testMap {
+            defer { cacheLock.unlock() }
+            return testMap
+        }
         if let cached = cacheValue, Date().timeIntervalSince(cacheTime) < cacheTTL {
             defer { cacheLock.unlock() }
             return cached
         }
         cacheLock.unlock()
 
-        let fresh = readSessionFile().map(parseSessionFile)
+        let fresh = readSessionFile().map(parseSessionFileGrouped)
 
         cacheLock.lock()
         defer { cacheLock.unlock() }
@@ -204,6 +290,23 @@ public enum CmuxHelper {
             return fresh
         }
         return cacheValue
+    }
+
+    // MARK: - Test hooks
+
+    /// Install a fixed grouped map so `surfaceInfo` lookups are deterministic
+    /// in tests (no dependency on the real cmux session file).
+    public static func installTestMap(_ map: [String: [CmuxSurfaceInfo]]) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        testMap = map
+    }
+
+    /// Remove any test override installed by `installTestMap`.
+    public static func clearTestMap() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        testMap = nil
     }
 
     private static func readSessionFile() -> Data? {
