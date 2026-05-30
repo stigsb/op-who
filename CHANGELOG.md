@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-30
+
+- Added: Overlay names the script driving the trigger when a shell or interpreter is in the chain (e.g. `python deploy.py`).
+- Fixed: Overlay now dismisses correctly when 1Password's main window is the tracked window.
+- Fixed: Overlay no longer shows the wrong workspace name when two cmux sessions collide on a tty.
+
 - Added: Overlay names the script driving the trigger when a shell or interpreter is in the chain (e.g. `python deploy.py`).
 
 ## [0.7.1] - 2026-05-26
