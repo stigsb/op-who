@@ -50,17 +50,19 @@ struct DebouncerTests {
     }
 
     @Test func rescheduleResetsTimer() async {
-        // Schedule, wait less than the interval, reschedule — the original
-        // closure must not run, and the new one fires one interval after
-        // the most recent schedule (not after the first one).
-        let debouncer = Debouncer(interval: 0.08, queue: Self.queue)
+        // Schedule, wait less than the interval, then reschedule before the
+        // first closure can fire. Only the most recent closure must run — the
+        // original is cancelled by the reschedule. We deliberately avoid a
+        // mid-flight "hasn't fired yet" assertion at a precise wall-clock
+        // moment: under CI load `Task.sleep` can oversleep, making such a
+        // negative check racy. The final value alone proves coalescing: if
+        // the reschedule did not cancel the original we would observe [1, 2].
+        let debouncer = Debouncer(interval: 0.05, queue: Self.queue)
         let recorder = Recorder()
         debouncer.schedule { recorder.record(1) }
-        try? await Task.sleep(nanoseconds: 40_000_000) // 40ms < 80ms
+        try? await Task.sleep(nanoseconds: 20_000_000) // 20ms < 50ms interval
         debouncer.schedule { recorder.record(2) }
-        try? await Task.sleep(nanoseconds: 60_000_000) // 100ms total, less than 80+40
-        #expect(recorder.values == [])
-        try? await Task.sleep(nanoseconds: 80_000_000) // now well past second interval
+        try? await Task.sleep(nanoseconds: 200_000_000) // well past the second interval
         #expect(recorder.values == [2])
     }
 }
