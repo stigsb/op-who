@@ -54,4 +54,46 @@ public enum UpdateChecker {
         }
         return .orderedSame
     }
+
+    private struct ReleaseResponse: Decodable {
+        let tagName: String
+        let htmlURL: String
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case htmlURL = "html_url"
+        }
+    }
+
+    /// Decode a GitHub `/releases/latest` response body and decide whether an
+    /// update is available relative to `currentVersion`. Pure — no network.
+    public static func evaluate(responseData: Data, currentVersion: String) -> UpdateCheckResult {
+        let release: ReleaseResponse
+        do {
+            release = try JSONDecoder().decode(ReleaseResponse.self, from: responseData)
+        } catch {
+            return .failed(message: "Unexpected response from GitHub.")
+        }
+
+        guard let latestComponents = parseVersion(release.tagName),
+              let releaseURL = URL(string: release.htmlURL) else {
+            return .failed(message: "Could not read the latest release info.")
+        }
+
+        // Normalized (v-stripped) string for display.
+        let latestDisplay = latestComponents.map(String.init).joined(separator: ".")
+
+        guard let currentComponents = parseVersion(currentVersion) else {
+            // Can't compare against an unknown local version; surface the
+            // available release rather than claiming up-to-date.
+            return .updateAvailable(latest: latestDisplay, releaseURL: releaseURL)
+        }
+
+        switch compare(latestComponents, currentComponents) {
+        case .orderedDescending:
+            return .updateAvailable(latest: latestDisplay, releaseURL: releaseURL)
+        case .orderedSame, .orderedAscending:
+            return .upToDate(current: currentVersion)
+        }
+    }
 }

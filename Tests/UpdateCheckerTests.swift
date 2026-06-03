@@ -37,3 +37,44 @@ struct UpdateCheckerVersionTests {
         #expect(UpdateChecker.compare([1, 2, 1], [1, 2]) == .orderedDescending)
     }
 }
+
+@Suite("UpdateChecker release evaluation")
+struct UpdateCheckerEvaluateTests {
+
+    private func releaseJSON(tag: String, url: String = "https://github.com/stigsb/op-who/releases/tag/x") -> Data {
+        """
+        {"tag_name": "\(tag)", "html_url": "\(url)", "name": "ignored"}
+        """.data(using: .utf8)!
+    }
+
+    @Test func reportsUpdateAvailableWhenRemoteNewer() {
+        let url = "https://github.com/stigsb/op-who/releases/tag/v0.9.0"
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "v0.9.0", url: url),
+                                            currentVersion: "0.8.0")
+        #expect(result == .updateAvailable(latest: "0.9.0", releaseURL: URL(string: url)!))
+    }
+
+    @Test func reportsUpToDateWhenEqual() {
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "v0.8.0"),
+                                            currentVersion: "0.8.0")
+        #expect(result == .upToDate(current: "0.8.0"))
+    }
+
+    @Test func reportsUpToDateWhenRemoteOlder() {
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "v0.7.0"),
+                                            currentVersion: "0.8.0")
+        #expect(result == .upToDate(current: "0.8.0"))
+    }
+
+    @Test func failsOnMalformedTag() {
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "nightly"),
+                                            currentVersion: "0.8.0")
+        if case .failed = result { } else { Issue.record("expected .failed, got \(result)") }
+    }
+
+    @Test func failsOnGarbageJSON() {
+        let result = UpdateChecker.evaluate(responseData: Data("not json".utf8),
+                                            currentVersion: "0.8.0")
+        if case .failed = result { } else { Issue.record("expected .failed, got \(result)") }
+    }
+}
