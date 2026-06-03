@@ -37,7 +37,7 @@ public enum UpdateChecker {
         let parts = s.split(separator: ".", omittingEmptySubsequences: false)
         var components: [Int] = []
         for part in parts {
-            guard let n = Int(part) else { return nil }
+            guard let n = Int(part), n >= 0 else { return nil }
             components.append(n)
         }
         return components.isEmpty ? nil : components

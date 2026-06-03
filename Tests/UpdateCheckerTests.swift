@@ -36,6 +36,10 @@ struct UpdateCheckerVersionTests {
         #expect(UpdateChecker.compare([1, 2], [1, 2, 0]) == .orderedSame)
         #expect(UpdateChecker.compare([1, 2, 1], [1, 2]) == .orderedDescending)
     }
+
+    @Test func rejectsNegativeComponents() {
+        #expect(UpdateChecker.parseVersion("1.-1.0") == nil)
+    }
 }
 
 @Suite("UpdateChecker release evaluation")
@@ -76,5 +80,12 @@ struct UpdateCheckerEvaluateTests {
         let result = UpdateChecker.evaluate(responseData: Data("not json".utf8),
                                             currentVersion: "0.8.0")
         if case .failed = result { } else { Issue.record("expected .failed, got \(result)") }
+    }
+
+    @Test func reportsUpdateAvailableWhenCurrentVersionUnparseable() {
+        let url = "https://github.com/stigsb/op-who/releases/tag/v1.0.0"
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "v1.0.0", url: url),
+                                            currentVersion: "unknown")
+        #expect(result == .updateAvailable(latest: "1.0.0", releaseURL: URL(string: url)!))
     }
 }
