@@ -60,6 +60,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         configItem.target = self
         menu.addItem(configItem)
+
+        let aboutItem = NSMenuItem(
+            title: "About op-who",
+            action: #selector(showAbout(_:)),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
+        let updatesItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updatesItem.target = self
+        menu.addItem(updatesItem)
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(
             title: "Quit op-who",
             // Route through our own selector instead of NSApplication.terminate(_:)
@@ -175,6 +193,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func quitAction(_ sender: Any?) {
         NSApp.terminate(sender)
+    }
+
+    /// Bring the (LSUIElement) app to the front so a modal alert is visible
+    /// and key. Mirrors the activation done in openConfigure(_:).
+    private func activateForDialog() {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func showAbout(_ sender: Any?) {
+        activateForDialog()
+        let alert = NSAlert()
+        alert.messageText = "op-who \(AppInfo.version)"
+        alert.informativeText =
+            "Identifies which app/process/tab/tty triggered a 1Password approval dialog."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "View on GitHub")
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSWorkspace.shared.open(AppInfo.repoURL)
+        }
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        UpdateChecker.checkForUpdates(currentVersion: AppInfo.version) { [weak self] result in
+            guard let self = self else { return }
+            self.activateForDialog()
+            let alert = NSAlert()
+            switch result {
+            case .upToDate(let current):
+                alert.messageText = "You're up to date"
+                alert.informativeText = "You're on the latest version (\(current))."
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            case .updateAvailable(let latest, let releaseURL):
+                alert.messageText = "Update available"
+                alert.informativeText =
+                    "op-who \(latest) is available (you have \(AppInfo.version))."
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "Download")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(releaseURL)
+                }
+            case .failed(let message):
+                alert.messageText = "Couldn't check for updates"
+                alert.informativeText = message
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
     }
 
     private func installMainMenu() {
