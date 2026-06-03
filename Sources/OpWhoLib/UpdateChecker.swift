@@ -96,4 +96,39 @@ public enum UpdateChecker {
             return .upToDate(current: currentVersion)
         }
     }
+
+    /// Fetch the latest release from GitHub and evaluate it against
+    /// `currentVersion`. The completion handler is always invoked on the main
+    /// thread. Network and decoding failures map to `.failed`.
+    public static func checkForUpdates(
+        currentVersion: String,
+        session: URLSession = .shared,
+        completion: @escaping (UpdateCheckResult) -> Void
+    ) {
+        func finish(_ result: UpdateCheckResult) {
+            DispatchQueue.main.async { completion(result) }
+        }
+
+        var request = URLRequest(url: latestReleaseAPI)
+        // GitHub's API rejects requests without a User-Agent.
+        request.setValue("op-who/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        let task = session.dataTask(with: request) { data, response, error in
+            if let error = error {
+                finish(.failed(message: error.localizedDescription))
+                return
+            }
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                finish(.failed(message: "GitHub returned HTTP \(http.statusCode)."))
+                return
+            }
+            guard let data = data else {
+                finish(.failed(message: "No data received from GitHub."))
+                return
+            }
+            finish(evaluate(responseData: data, currentVersion: currentVersion))
+        }
+        task.resume()
+    }
 }
