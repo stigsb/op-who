@@ -120,46 +120,52 @@ public class OnePasswordWatcher {
     }
 
     /// Check whether the AX element looks like a 1Password approval dialog.
-    ///
-    /// 1Password renders its UI in an Electron web view. The AX tree is often
-    /// empty or incomplete when the window first appears, making content-based
-    /// detection unreliable.  Instead we use a two-tier approach:
-    ///
-    /// 1. AXDialog subrole → always an approval dialog.
-    /// 2. AXStandardWindow → accept unless the window title matches a known
-    ///    non-dialog surface (vault browser, lock screen, settings, etc.).
-    ///    The actual approval confirmation is deferred to `handleWindowEvent`
-    ///    which checks for triggering processes.
+    /// Reads the element's AX attributes and delegates the decision to the
+    /// pure `isApprovalWindow`, then logs accepted/rejected windows for
+    /// diagnosis.
     private func isApprovalDialog(_ element: AXUIElement) -> Bool {
-        // Must be a window
-        guard axStringAttribute(element, kAXRoleAttribute) == "AXWindow" else {
-            return false
-        }
-
+        let role = axStringAttribute(element, kAXRoleAttribute)
         let subrole = axStringAttribute(element, kAXSubroleAttribute)
-        if subrole == "AXDialog" {
-            return true
-        }
+        let title = axStringAttribute(element, kAXTitleAttribute)
 
-        // For standard windows, exclude known non-dialog surfaces by title.
-        let title = axStringAttribute(element, kAXTitleAttribute) ?? ""
-        let nonDialogPatterns = [
-            "Lock Screen",
-            "All Items",
-            "All Accounts",
-            "Settings",
-            "Watchtower",
-            "Developer",
-        ]
-        let isKnownNonDialog = nonDialogPatterns.contains { title.localizedCaseInsensitiveContains($0) }
-        if isKnownNonDialog {
-            return false
-        }
+        let result = Self.isApprovalWindow(role: role, subrole: subrole, title: title)
 
-        // Any other 1Password window (including the generic "1Password" title
-        // used for SSH and CLI approval dialogs) — treat as potential approval.
-        Log.watcher.info("Potential approval window (title: \"\(title, privacy: .public)\", subrole: \(subrole ?? "nil", privacy: .public))")
-        return true
+        // Only standard 1Password windows reach the title heuristic; AXDialog
+        // is unconditionally an approval and not worth logging at info.
+        if role == "AXWindow" && subrole != "AXDialog" {
+            if result {
+                Log.watcher.info("Potential approval window (title: \"\(title ?? "", privacy: .public)\", subrole: \(subrole ?? "nil", privacy: .public))")
+            } else {
+                Log.watcher.debug("Ignoring non-approval 1Password window (title: \"\(title ?? "", privacy: .public)\", subrole: \(subrole ?? "nil", privacy: .public))")
+            }
+        }
+        return result
+    }
+
+    /// Pure decision: does a 1Password window with these AX attributes look
+    /// like a CLI/SSH approval prompt? Kept free of AX calls so it is directly
+    /// testable.
+    ///
+    /// 1Password renders its UI in an Electron web view, so content-based
+    /// detection is unreliable — the AX tree is often empty when a window first
+    /// appears. We classify on the window title instead, but *positively*:
+    ///
+    /// 1. AXDialog subrole → always an approval dialog (GUI approvals).
+    /// 2. AXStandardWindow → an approval prompt only when its title is the bare
+    ///    app name "1Password". Every persistent 1Password surface is named
+    ///    descriptively as "<surface> — 1Password" (e.g. "Quick Access —
+    ///    1Password" from ⌘⇧Space, "<Account> — 1Password", "Settings"); only
+    ///    CLI and SSH approval prompts carry the bare "1Password" title.
+    ///
+    /// Matching the bare title positively (rather than denylisting named
+    /// surfaces) is what keeps Quick Access, account windows, and any
+    /// future/localized surface from leaking through — a denylist could never
+    /// be exhaustive.
+    static func isApprovalWindow(role: String?, subrole: String?, title: String?) -> Bool {
+        guard role == "AXWindow" else { return false }
+        if subrole == "AXDialog" { return true }
+        let trimmed = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.caseInsensitiveCompare("1Password") == .orderedSame
     }
 
     /// Return the string value of an AX attribute, or nil.
