@@ -27,8 +27,6 @@ class OverlayPanel {
         let cmuxWorkspaceID: String?
         let cmuxTabID: String?
         let cmuxSurface: CmuxSurfaceInfo?
-        /// Start time of the trigger process — used for the elapsed-time column.
-        let startTime: Date?
         /// Set when the trigger is a `git` operation Claude Code initiated
         /// in the background to refresh a plugin/marketplace repo.
         let pluginUpdate: ClaudePluginUpdate?
@@ -54,12 +52,21 @@ class OverlayPanel {
     private var elapsedLabels: [ElapsedLabel] = []
     private var elapsedTimer: Timer?
 
+    /// When the overlay was shown. The elapsed-time column counts up from
+    /// here — it measures how long the *approval* has been pending, not how
+    /// long the trigger process has been alive (a long-lived ssh session
+    /// would otherwise start the timer at its full age instead of 0).
+    private var shownAt: Date = .distantPast
+
     func show(entries: [ProcessEntry], near windowFrame: CGRect?) {
 
         let panel = makePanel()
         self.panel = panel
 
         // Build content (and as a side effect, register elapsed labels).
+        // Anchor the elapsed timer to now, before building, so every label
+        // counts up from the moment the popup appeared.
+        shownAt = Date()
         elapsedLabels.removeAll()
         let contentView = buildContentView(entries: entries)
         panel.contentView = contentView
@@ -336,30 +343,30 @@ class OverlayPanel {
             shortcutsLabel = sl
         }
 
-        // Trailing elapsed-time label, only if we know the start time.
-        if let start = entry.startTime {
-            let timeLabel = makeLabel(
-                formatElapsed(0),
-                size: 12, weight: .medium,
-                color: elapsedColor(0),
-                mono: true
-            )
-            timeLabel.alignment = .right
-            // Reserve a fixed slot so growing values ("5s" → "10s" → "1m0s")
-            // fill the slot from the right rather than pushing the rest of
-            // the row around. 56pt comfortably fits "59m59s" in 12pt mono.
-            timeLabel.translatesAutoresizingMaskIntoConstraints = false
-            timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-            timeLabel.setContentHuggingPriority(.required, for: .horizontal)
-            timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-            // Add visual breathing room between the shortcuts cluster and
-            // the timer so they read as separate concerns.
-            if let sl = shortcutsLabel {
-                row.setCustomSpacing(16, after: sl)
-            }
-            row.addArrangedSubview(timeLabel)
-            elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: start))
+        // Trailing elapsed-time label. Counts up from when the popup appeared
+        // (`shownAt`), so it reflects how long the approval has been pending
+        // rather than the trigger process's age.
+        let timeLabel = makeLabel(
+            formatElapsed(0),
+            size: 12, weight: .medium,
+            color: elapsedColor(0),
+            mono: true
+        )
+        timeLabel.alignment = .right
+        // Reserve a fixed slot so growing values ("5s" → "10s" → "1m0s")
+        // fill the slot from the right rather than pushing the rest of
+        // the row around. 56pt comfortably fits "59m59s" in 12pt mono.
+        timeLabel.translatesAutoresizingMaskIntoConstraints = false
+        timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+        timeLabel.setContentHuggingPriority(.required, for: .horizontal)
+        timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // Add visual breathing room between the shortcuts cluster and
+        // the timer so they read as separate concerns.
+        if let sl = shortcutsLabel {
+            row.setCustomSpacing(16, after: sl)
         }
+        row.addArrangedSubview(timeLabel)
+        elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: shownAt))
 
         return row
     }

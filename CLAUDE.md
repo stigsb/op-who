@@ -28,3 +28,32 @@ swift test
 ```
 
 Tests use Swift Testing (`import Testing`).
+
+### Running tests without full Xcode (CommandLineTools-only toolchains)
+
+On a machine where `xcode-select -p` points at `/Library/Developer/CommandLineTools`
+(no full Xcode installed), a bare `swift test` fails. The `Testing` framework
+ships with CommandLineTools but is not on the default compile or runtime search
+paths, so you hit a cascade of errors: first `no such module 'Testing'` at compile
+time, then at runtime `Library not loaded: @rpath/Testing.framework/...`, then
+`@rpath/lib_TestingInterop.dylib`.
+
+The compile path is fixed by passing the framework search path; the runtime
+failures happen because `swiftpm-testing-helper` strips `DYLD_*` env vars on
+re-exec (SIP), so the dylibs must be reachable via the test binary's `@rpath`.
+The binary searches `.build/<triple>/debug/`, so symlink both libraries there:
+
+```bash
+FW=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+LIB=/Library/Developer/CommandLineTools/Library/Developer/usr/lib
+BUILD=.build/arm64-apple-macosx/debug   # adjust triple for Intel
+ln -sf "$FW/Testing.framework"          "$BUILD/Testing.framework"
+ln -sf "$LIB/lib_TestingInterop.dylib"  "$BUILD/lib_TestingInterop.dylib"
+
+swift test \
+  -Xswiftc -F -Xswiftc "$FW" \
+  -Xlinker -F -Xlinker "$FW"
+```
+
+The symlinks live under `.build/` (gitignored) and survive until the next clean.
+Installing full Xcode and `xcode-select`-ing to it avoids the whole dance.

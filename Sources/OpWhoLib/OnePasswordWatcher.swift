@@ -298,8 +298,6 @@ public class OnePasswordWatcher {
                 }
             }
 
-            let entryStartTime = measure("processStartTime") { ProcessTree.processStartTime(pid: triggerPID) }
-
             // Run the matcher engine once here so the same evaluation drives
             // candidate ranking, overlay rendering, ring-buffer recording,
             // and the debug log dump. The matched rule's id/name and the
@@ -344,7 +342,6 @@ public class OnePasswordWatcher {
                 cmuxWorkspaceID: cmuxWorkspaceID,
                 cmuxTabID: cmuxTabID,
                 cmuxSurface: cmuxSurface,
-                startTime: entryStartTime,
                 pluginUpdate: pluginUpdate,
                 summary: summary,
                 matchedRuleID: matchResult?.rule.id,

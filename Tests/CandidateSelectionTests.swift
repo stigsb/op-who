@@ -19,7 +19,7 @@ private func entry(pid: pid_t, chain: [ProcessNode]) -> OverlayPanel.ProcessEntr
         terminalBundleID: nil, terminalPID: nil, cwd: nil,
         triggerCwd: nil,
         cmuxWorkspaceID: nil, cmuxTabID: nil, cmuxSurface: nil,
-        startTime: nil, pluginUpdate: nil,
+        pluginUpdate: nil,
         summary: RequestSummary(kind: .unknown, title: "", subtitle: nil, isWarning: false),
         matchedRuleID: nil, matchedRuleName: nil, matchedBuiltInID: nil
     )

@@ -28,7 +28,6 @@ struct OverlayPanelTerminalRowTextTests {
             cmuxWorkspaceID: nil,
             cmuxTabID: nil,
             cmuxSurface: cmuxSurface,
-            startTime: nil,
             pluginUpdate: nil,
             summary: RequestSummary(kind: .unknown, title: "", subtitle: nil, isWarning: false),
             matchedRuleID: nil,

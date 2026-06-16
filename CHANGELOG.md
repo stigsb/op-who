@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed: Overlay timer now starts at 0 when the popup appears, measuring how long the approval has been pending rather than the trigger process's age (previously a long-lived ssh session started the timer at its full age).
+
 ## [0.8.0] - 2026-05-30
 
 - Added: Overlay names the script driving the trigger when a shell or interpreter is in the chain (e.g. `python deploy.py`).
