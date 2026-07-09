@@ -14,7 +14,7 @@ See [CONTRIBUTORS.md](CONTRIBUTORS.md) for architecture, build instructions, and
 - CWD walks the process chain to find the first non-`/` directory (trigger processes often have CWD `/`)
 - Claude Code detected by checking `node` process args for "claude" or "@anthropic" strings
 - `LSUIElement=true` in Info.plist makes this a menu bar app (no dock icon)
-- Secrets in argv are redacted at capture (`redactArgv` in `SecretRedaction.swift`): `op` field assignments with a `password`/`concealed` type or a credential-ish name, known token shapes (AWS/GitHub/Slack/JWT/PEM/Bearer/URL-userinfo), and high-entropy blobs are replaced with `‹redacted›` before argv reaches the popup, the unified log, or predicate rule matching. Redaction preserves token count/order so argv parsers are unaffected.
+- Secrets are redacted at capture (`SecretRedaction.swift`): `op` field assignments with a `password`/`concealed` type or a credential-ish name, known token shapes (AWS/GitHub/Slack/JWT/PEM/Bearer/URL-userinfo), and high-entropy blobs are replaced with `‹redacted›`. `redactArgv` covers trigger argv (popup, unified log, predicate rule matching) and preserves token count/order so argv parsers are unaffected; `redactString` covers interpreter inline-command snippets (`ProcessTree.detectScript`) and user-typed Claude Code context (`ClaudeContext` last command/prompt, redacted before truncation).
 
 ## Build & TCC permissions
 

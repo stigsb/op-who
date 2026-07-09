@@ -94,8 +94,8 @@ public func parseClaudeContext(jsonlTail: String, sessionID: String) -> ClaudeCo
     if lastPrompt == nil && lastCommand == nil { return nil }
     return ClaudeContext(
         sessionID: sessionID,
-        lastUserPrompt: lastPrompt.map { truncate($0) },
-        lastRelevantCommand: lastCommand.map { truncate($0) }
+        lastUserPrompt: lastPrompt.map { truncate(redactString($0)) },
+        lastRelevantCommand: lastCommand.map { truncate(redactString($0)) }
     )
 }
 
