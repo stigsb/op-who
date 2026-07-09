@@ -129,14 +129,31 @@ scripts/upload-dev.sh --draft   # uploads but leaves the release as a draft
 
 The script defaults to publishing (`draft=false`). The draft release itself was opened by `.github/workflows/release.yml` on tag push, with `## Install` instructions (from `.github/release-install-template.md`) and a `## Changes` section auto-generated from PR/commit history. Pass `--draft` if you want to review or edit the notes in the GitHub UI before flipping the switch.
 
+### Release artifacts: `.zip` (Homebrew) and `.pkg` (Fleet/MDM)
+
+Each release produces two distributables from the same signed, notarized `op-who.app`:
+
+- **`op-who.zip`** — drag-install artifact for the Homebrew cask (`stigsb/tap`). Signed with the **Developer ID Application** cert, notarized, stapled.
+- **`op-who-<version>.pkg`** — installer for MDM/Fleet software distribution. Signed with the **Developer ID Installer** cert (and notarized). Fleet installs it non-interactively. Beyond dropping `op-who.app` into `/Applications`, the pkg installs a login LaunchAgent (`packaging/launchd/com.stigbakken.op-who.plist`) to `/Library/LaunchAgents` and runs `packaging/scripts/postinstall`, which boots the agent for the logged-in user so a silent push takes effect without a logout. Build it with `scripts/build-pkg.sh` (called automatically by `scripts/release.sh`).
+
+  Accessibility (and Apple Events for Terminal/iTerm2) can be pre-granted on managed Macs via the PPPC profile in the `fleet-config` repo — keyed on Team ID `HZ76GWS9YM`, so it only matches Developer ID–signed builds.
+
 ### When the Apple Developer ID cert lands
 
-`.github/workflows/release-notarized.yml` carries the full build → hardened-runtime sign → notarize → publish → Homebrew tap flow. It's gated behind `workflow_dispatch` until the maintainer has a Developer ID Application certificate plus the GitHub Actions secrets (`DEVELOPER_ID_CERTIFICATE_P12`, `DEVELOPER_ID_CERTIFICATE_PASSWORD`, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, `NOTARY_TEAM_ID`, `TAP_GITHUB_TOKEN`).
+`.github/workflows/release-notarized.yml` carries the full build → hardened-runtime sign → notarize → publish → Homebrew tap flow. It's gated behind `workflow_dispatch` until the maintainer has the Developer ID **Application** *and* **Installer** certificates plus the GitHub Actions secrets (`DEVELOPER_ID_CERTIFICATE_P12`, `DEVELOPER_ID_CERTIFICATE_PASSWORD`, `DEVELOPER_ID_INSTALLER_P12`, `DEVELOPER_ID_INSTALLER_PASSWORD`, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, `NOTARY_TEAM_ID`, `TAP_GITHUB_TOKEN`).
 
-When those are ready:
+For local notarization, store an app-specific-password credential once (the scripts use the `op-who` profile by default):
+
+```bash
+xcrun notarytool store-credentials "op-who" \
+  --apple-id <your-apple-id> --team-id HZ76GWS9YM \
+  --password <app-specific-password>   # from appleid.apple.com
+```
+
+When the secrets are ready:
 1. Re-enable the tag trigger in `release-notarized.yml` (swap `workflow_dispatch:` back to `push: tags: ['v*']`).
 2. Retire or repurpose `release.yml` so a single workflow handles each tag.
-3. Use `scripts/release.sh` locally for full hardened-runtime + notarized + stapled builds.
+3. Use `scripts/release.sh` locally for full hardened-runtime + notarized + stapled builds (produces both the `.zip` and the `.pkg`).
 
 The signed-checksums trust loop should stay in place even then — notarization addresses Gatekeeper, not artifact tampering at rest.
 

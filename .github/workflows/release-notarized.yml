@@ -1,10 +1,11 @@
 name: Release (notarized)
 
-# Disabled tag trigger: this workflow expects DEVELOPER_ID_CERTIFICATE_P12,
-# NOTARY_APPLE_ID, NOTARY_PASSWORD, NOTARY_TEAM_ID, and TAP_GITHUB_TOKEN secrets,
-# which aren't configured yet. Re-add the `push: tags: ['v*']` trigger once an
-# Apple Developer ID Application certificate is available and the secrets are
-# populated. Until then it can be invoked manually for testing.
+# Disabled tag trigger: this workflow expects DEVELOPER_ID_CERTIFICATE_P12 (+
+# _PASSWORD) for the .app, DEVELOPER_ID_INSTALLER_P12 (+ _PASSWORD) for the
+# .pkg, NOTARY_APPLE_ID, NOTARY_PASSWORD, NOTARY_TEAM_ID, and TAP_GITHUB_TOKEN
+# secrets, which aren't configured yet. Re-add the `push: tags: ['v*']` trigger
+# once the Developer ID Application + Installer certificates are available and
+# the secrets are populated. Until then it can be invoked manually for testing.
 
 on:
   workflow_dispatch:
@@ -41,6 +42,8 @@ jobs:
         env:
           CERTIFICATE_P12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          INSTALLER_P12: ${{ secrets.DEVELOPER_ID_INSTALLER_P12 }}
+          INSTALLER_PASSWORD: ${{ secrets.DEVELOPER_ID_INSTALLER_PASSWORD }}
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
@@ -50,12 +53,20 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import certificate
+          # Import Developer ID Application cert (signs op-who.app)
           echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
           security import "$RUNNER_TEMP/certificate.p12" \
             -P "$CERTIFICATE_PASSWORD" \
             -A -t cert -f pkcs12 \
             -k "$KEYCHAIN_PATH"
+
+          # Import Developer ID Installer cert (signs the .pkg)
+          echo "$INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/installer.p12" \
+            -P "$INSTALLER_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
@@ -94,6 +105,15 @@ jobs:
           rm .build/op-who.zip
           ditto -c -k --keepParent .build/op-who.app .build/op-who.zip
 
+      - name: Build Fleet installer pkg
+        # Signed with the Developer ID Installer cert imported above; notarized
+        # via the NOTARY_* env creds (build-pkg.sh prefers them over a profile).
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+        run: scripts/build-pkg.sh
+
       - name: Compute SHA256
         id: sha
         run: echo "sha256=$(shasum -a 256 .build/op-who.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
@@ -102,7 +122,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" .build/op-who.zip \
+          gh release create "$GITHUB_REF_NAME" \
+            .build/op-who.zip \
+            ".build/op-who-${{ steps.version.outputs.version }}.pkg" \
             --title "op-who ${{ steps.version.outputs.version }}" \
             --generate-notes
 
