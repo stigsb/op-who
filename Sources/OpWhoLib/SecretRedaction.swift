@@ -39,6 +39,7 @@ func redactHighEntropy(_ s: String) -> String {
             value = word
         }
         guard value.count >= 20,
+              !value.hasPrefix("-"),
               !value.contains("/"),
               value.allSatisfy({ base64ishCharset.contains($0) }),
               shannonEntropy(value) >= 3.5
@@ -56,8 +57,8 @@ private struct PatternRule {
     let template: String
 }
 
-private func rule(_ pattern: String, keepPrefix: Bool = false) -> PatternRule? {
-    guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+private func rule(_ pattern: String, keepPrefix: Bool = false) -> PatternRule {
+    let re = try! NSRegularExpression(pattern: pattern)
     return PatternRule(regex: re, template: keepPrefix ? "$1" + secretRedactionPlaceholder
                                                        : secretRedactionPlaceholder)
 }
@@ -70,8 +71,8 @@ private let knownPatternRules: [PatternRule] = [
     rule("eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"),
     rule("-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     rule("(?i)(bearer\\s+)[A-Za-z0-9._-]{8,}", keepPrefix: true),
-    rule("(://[^/\\s:@]+:)[^/\\s@]+", keepPrefix: true),
-].compactMap { $0 }
+    rule("(://[^/\\s:@]+:)[^/\\s@]+(?=@)", keepPrefix: true),
+]
 
 /// Replace any substring matching a known secret-token shape with the
 /// placeholder. `keepPrefix` rules preserve a readable lead-in (`Bearer `,

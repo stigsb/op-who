@@ -93,4 +93,28 @@ struct SecretRedactionTests {
         #expect(redactString(snippet).contains(secretRedactionPlaceholder))
         #expect(!redactString(snippet).contains("abcdef123456"))
     }
+
+    @Test func urlHostPortWithoutUserinfoIsPreserved() {
+        #expect(redactKnownPatterns("redis://localhost:6379") == "redis://localhost:6379")
+        #expect(redactKnownPatterns("postgres://localhost:5432/mydb") == "postgres://localhost:5432/mydb")
+    }
+
+    @Test func urlUserinfoPasswordStillRedactedWithHostPortTail() {
+        #expect(redactKnownPatterns("postgres://user:secretpw@db.example.com:5432/app")
+                == "postgres://user:" + secretRedactionPlaceholder + "@db.example.com:5432/app")
+    }
+
+    @Test func entropyLayerKeepsLongFlags() {
+        #expect(redactHighEntropy("--enable-some-experimental-feature-flag") == "--enable-some-experimental-feature-flag")
+    }
+
+    @Test func entropyLayerStillRedactsBlobAfterFlagEquals() {
+        let blob = "wJalrXUtnFEMIK7MDENGbPxRfiCYz9qLpTvBhKmN"
+        #expect(redactHighEntropy("--token=" + blob) == "--token=" + secretRedactionPlaceholder)
+    }
+
+    @Test func redactArgvHandlesEmptyInput() {
+        #expect(redactArgv([]) == [])
+        #expect(redactString("") == "")
+    }
 }
