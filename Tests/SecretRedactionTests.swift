@@ -33,4 +33,24 @@ struct SecretRedactionTests {
         #expect(redactHighEntropy("item create") == "item create")
         #expect(redactHighEntropy("short") == "short")
     }
+
+    @Test func knownPatternsRedactStructuredTokens() {
+        #expect(redactKnownPatterns("AKIAIOSFODNN7EXAMPLE") == secretRedactionPlaceholder)
+        #expect(redactKnownPatterns("ghp_" + String(repeating: "a", count: 36)) == secretRedactionPlaceholder)
+        #expect(redactKnownPatterns("xoxb-123456789012-abcdefabcdef") == secretRedactionPlaceholder)
+        #expect(redactKnownPatterns("AIza" + String(repeating: "b", count: 35)) == secretRedactionPlaceholder)
+        #expect(redactKnownPatterns("eyJhbGc.eyJzdWI.SflKxwRJ") == secretRedactionPlaceholder)
+        #expect(redactKnownPatterns("-----BEGIN OPENSSH PRIVATE KEY-----") == secretRedactionPlaceholder)
+    }
+
+    @Test func knownPatternsKeepBearerAndUrlPrefix() {
+        #expect(redactKnownPatterns("Authorization: Bearer abcdef123456")
+                == "Authorization: Bearer " + secretRedactionPlaceholder)
+        #expect(redactKnownPatterns("https://user:hunter2@example.com")
+                == "https://user:" + secretRedactionPlaceholder + "@example.com")
+    }
+
+    @Test func knownPatternsLeaveOrdinaryTextAlone() {
+        #expect(redactKnownPatterns("op item get GitHub") == "op item get GitHub")
+    }
 }

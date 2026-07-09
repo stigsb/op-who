@@ -47,3 +47,41 @@ func redactHighEntropy(_ s: String) -> String {
     }
     return redacted.joined(separator: " ")
 }
+
+private struct PatternRule {
+    let regex: NSRegularExpression
+    /// Replacement template. `$1` keeps the first capture group (a readable
+    /// prefix like `Bearer ` or `user:`); no group means the whole match is
+    /// replaced by the placeholder.
+    let template: String
+}
+
+private func rule(_ pattern: String, keepPrefix: Bool = false) -> PatternRule? {
+    guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+    return PatternRule(regex: re, template: keepPrefix ? "$1" + secretRedactionPlaceholder
+                                                       : secretRedactionPlaceholder)
+}
+
+private let knownPatternRules: [PatternRule] = [
+    rule("AKIA[0-9A-Z]{16}"),
+    rule("gh[pousr]_[A-Za-z0-9]{36,}"),
+    rule("xox[baprs]-[A-Za-z0-9-]{10,}"),
+    rule("AIza[0-9A-Za-z_-]{35}"),
+    rule("eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"),
+    rule("-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    rule("(?i)(bearer\\s+)[A-Za-z0-9._-]{8,}", keepPrefix: true),
+    rule("(://[^/\\s:@]+:)[^/\\s@]+", keepPrefix: true),
+].compactMap { $0 }
+
+/// Replace any substring matching a known secret-token shape with the
+/// placeholder. `keepPrefix` rules preserve a readable lead-in (`Bearer `,
+/// `user:`) so the popup still hints at what kind of secret was hidden.
+func redactKnownPatterns(_ s: String) -> String {
+    var result = s
+    for r in knownPatternRules {
+        let ns = result as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        result = r.regex.stringByReplacingMatches(in: result, range: range, withTemplate: r.template)
+    }
+    return result
+}
