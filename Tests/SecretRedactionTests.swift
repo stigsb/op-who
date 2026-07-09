@@ -70,4 +70,27 @@ struct SecretRedactionTests {
         #expect(redactOpFields("username=admin") == "username=admin")
         #expect(redactOpFields("url[text]=https://example.com") == "url[text]=https://example.com")
     }
+
+    @Test func redactArgvPreservesCountAndOrderAndRedactsSecrets() {
+        let input = ["op", "item", "create", "password[password]=hunter2", "--vault", "Personal"]
+        let out = redactArgv(input)
+        #expect(out.count == input.count)
+        #expect(out[0] == "op")
+        #expect(out[1] == "item")
+        #expect(out[2] == "create")
+        #expect(out[3] == "password[password]=" + secretRedactionPlaceholder)
+        #expect(out[4] == "--vault")
+        #expect(out[5] == "Personal")
+    }
+
+    @Test func redactArgvLeavesCleanArgvUntouched() {
+        let input = ["op", "read", "op://Personal/GitHub/token"]
+        #expect(redactArgv(input) == input)
+    }
+
+    @Test func redactStringHandlesInlineCommandSnippet() {
+        let snippet = "curl -H 'Authorization: Bearer abcdef123456' https://api.example.com"
+        #expect(redactString(snippet).contains(secretRedactionPlaceholder))
+        #expect(!redactString(snippet).contains("abcdef123456"))
+    }
 }

@@ -119,3 +119,22 @@ func redactOpFields(_ s: String) -> String {
     }
     return result
 }
+
+/// Run all three redaction layers over one string. Order matters: op-field
+/// assignments first (most specific), then known token patterns, then the
+/// entropy sweep as a catch-all.
+func redactToken(_ s: String) -> String {
+    var r = s
+    r = redactOpFields(r)
+    r = redactKnownPatterns(r)
+    r = redactHighEntropy(r)
+    return r
+}
+
+/// Redact secrets inside a single string (interpreter inline-command snippets).
+public func redactString(_ s: String) -> String { redactToken(s) }
+
+/// Redact secrets from an argv array. The result has the SAME count and order
+/// as the input — each token maps to itself or a redacted copy — so every
+/// position-based argv parser keeps working unchanged.
+public func redactArgv(_ argv: [String]) -> [String] { argv.map(redactToken) }
