@@ -53,4 +53,21 @@ struct SecretRedactionTests {
     @Test func knownPatternsLeaveOrdinaryTextAlone() {
         #expect(redactKnownPatterns("op item get GitHub") == "op item get GitHub")
     }
+
+    @Test func opFieldRedactsBySecretType() {
+        #expect(redactOpFields("password[password]=hunter2") == "password[password]=" + secretRedactionPlaceholder)
+        #expect(redactOpFields("api[concealed]=abc123") == "api[concealed]=" + secretRedactionPlaceholder)
+    }
+
+    @Test func opFieldRedactsBySecretName() {
+        for name in ["credential", "password", "passwd", "secret", "token", "apikey", "api_key", "myPrivateKey", "private-key"] {
+            #expect(redactOpFields("\(name)=xyz") == "\(name)=" + secretRedactionPlaceholder,
+                    "expected \(name) to be redacted")
+        }
+    }
+
+    @Test func opFieldKeepsNonSecretAssignments() {
+        #expect(redactOpFields("username=admin") == "username=admin")
+        #expect(redactOpFields("url[text]=https://example.com") == "url[text]=https://example.com")
+    }
 }

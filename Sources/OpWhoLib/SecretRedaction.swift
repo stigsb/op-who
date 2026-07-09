@@ -85,3 +85,37 @@ func redactKnownPatterns(_ s: String) -> String {
     }
     return result
 }
+
+private let opFieldRegex = try! NSRegularExpression(
+    pattern: "([A-Za-z0-9._-]+)(\\[([A-Za-z]+)\\])?=(\\S+)")
+
+private let secretFieldKeywords = ["credential", "password", "passwd", "secret", "token", "apikey", "api_key"]
+
+/// True when an `op` field assignment `name[type]=value` carries a secret,
+/// judged by field type (`password`/`concealed`) or by the field name.
+private func shouldRedactField(name: String, type: String?) -> Bool {
+    if let t = type?.lowercased(), t == "password" || t == "concealed" { return true }
+    let n = name.lowercased()
+    if secretFieldKeywords.contains(where: { n.contains($0) }) { return true }
+    if n.range(of: "private.?key", options: .regularExpression) != nil { return true }
+    return false
+}
+
+/// Redact the value of any `op item` field assignment that looks secret,
+/// preserving the `name[type]=` prefix so the operation stays legible.
+func redactOpFields(_ s: String) -> String {
+    let ns = s as NSString
+    let matches = opFieldRegex.matches(in: s, range: NSRange(location: 0, length: ns.length))
+    guard !matches.isEmpty else { return s }
+    var result = s
+    // Reverse order so replacing a value never shifts an earlier match's range.
+    for m in matches.reversed() {
+        let name = ns.substring(with: m.range(at: 1))
+        let type = m.range(at: 3).location != NSNotFound ? ns.substring(with: m.range(at: 3)) : nil
+        guard shouldRedactField(name: name, type: type) else { continue }
+        if let r = Range(m.range(at: 4), in: result) {
+            result.replaceSubrange(r, with: secretRedactionPlaceholder)
+        }
+    }
+    return result
+}
