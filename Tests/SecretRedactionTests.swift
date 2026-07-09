@@ -117,4 +117,11 @@ struct SecretRedactionTests {
         #expect(redactArgv([]) == [])
         #expect(redactString("") == "")
     }
+
+    @Test func detectScriptRedactsSecretInInlineCommand() {
+        let argv = ["bash", "-c", "export TOKEN=ghp_" + String(repeating: "a", count: 36) + "; run"]
+        let info = ProcessTree.detectScript(interpreter: "bash", argv: argv)
+        #expect(info?.scriptName.contains(secretRedactionPlaceholder) == true)
+        #expect(info?.scriptName.contains("ghp_") == false)
+    }
 }
