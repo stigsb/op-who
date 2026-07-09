@@ -18,3 +18,32 @@ func shannonEntropy(_ s: String) -> Double {
     }
     return h
 }
+
+private let base64ishCharset = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+=_-")
+
+/// Redact whitespace-delimited words whose value looks like a high-entropy
+/// secret. For `key=value` / `--flag=value` words only the part after the last
+/// `=` is evaluated and replaced, so the key stays readable. Words containing
+/// `/` (filesystem paths, `op://` URIs) are skipped, which is why the value
+/// charset deliberately excludes `/`.
+func redactHighEntropy(_ s: String) -> String {
+    let words = s.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+    let redacted = words.map { word -> String in
+        let prefix: String
+        let value: String
+        if let eq = word.lastIndex(of: "=") {
+            prefix = String(word[...eq])
+            value = String(word[word.index(after: eq)...])
+        } else {
+            prefix = ""
+            value = word
+        }
+        guard value.count >= 20,
+              !value.contains("/"),
+              value.allSatisfy({ base64ishCharset.contains($0) }),
+              shannonEntropy(value) >= 3.5
+        else { return word }
+        return prefix + secretRedactionPlaceholder
+    }
+    return redacted.joined(separator: " ")
+}
