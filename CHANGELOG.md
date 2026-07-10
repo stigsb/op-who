@@ -7,22 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added: Signed `.pkg` installer (Developer ID Installer, notarized) for MDM/Fleet software distribution, alongside the Homebrew `.zip`. The pkg installs a login LaunchAgent and boots it via a postinstall so a silent push takes effect without a logout.
+
 ## [0.9.0] - 2026-06-16
 
 - Added: "About op-who" menu item showing the running version.
 - Added: "Check for Updates…" menu item that compares against the latest GitHub release.
-- Fixed: Overlay timer now starts at 0 when the popup appears, measuring how long the approval has been pending rather than the trigger process's age.
-- Fixed: Only bare "1Password" windows are treated as approval prompts, avoiding spurious overlays from other 1Password windows.
-
 - Fixed: Overlay timer now starts at 0 when the popup appears, measuring how long the approval has been pending rather than the trigger process's age (previously a long-lived ssh session started the timer at its full age).
+- Fixed: Only bare "1Password" windows are treated as approval prompts, avoiding spurious overlays from other 1Password windows.
 
 ## [0.8.0] - 2026-05-30
 
 - Added: Overlay names the script driving the trigger when a shell or interpreter is in the chain (e.g. `python deploy.py`).
 - Fixed: Overlay now dismisses correctly when 1Password's main window is the tracked window.
 - Fixed: Overlay no longer shows the wrong workspace name when two cmux sessions collide on a tty.
-
-- Added: Overlay names the script driving the trigger when a shell or interpreter is in the chain (e.g. `python deploy.py`).
 
 ## [0.7.1] - 2026-05-26
 

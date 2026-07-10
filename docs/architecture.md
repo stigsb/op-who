@@ -29,6 +29,7 @@ flowchart TB
         cmux["CmuxHelper"]
         overlay["OverlayPanel<br/>floating NSPanel UI"]
         term["TerminalHelper<br/>tab title / activate / write"]
+        upd["UpdateChecker + AppInfo<br/>version check via GitHub API"]
     end
 
     subgraph shim[OpWhoObjCShim]
@@ -37,6 +38,7 @@ flowchart TB
 
     main --> watcher
     main --> cfg
+    main --> upd
     cfg --> rules
     cfg --> ctx
     cfg --> hi
@@ -69,7 +71,7 @@ flowchart TB
 
 Module responsibilities at a glance:
 
-- **`main.swift`** — bootstraps `NSApplication`, installs the status bar item and an Edit-menu-bearing main menu, requests Accessibility permission (with restart-on-grant polling), instantiates `RequestRuleStore`, `RecentRequestsStore`, and `OnePasswordWatcher`.
+- **`main.swift`** — bootstraps `NSApplication`, installs the status bar item and an Edit-menu-bearing main menu, requests Accessibility permission (with restart-on-grant polling), instantiates `RequestRuleStore`, `RecentRequestsStore`, and `OnePasswordWatcher`. Its status-bar menu also carries "About op-who", "Check for Updates…", "Settings…", and "Quit op-who".
 - **`ConfigWindowController` + `RulesPane` + `GeneralPane` + `AddRuleSheetController` + `TestPredicateSheetController`** — Settings UI. Single scrollable pane with a unified user-+-built-in rules table, a detail form (name, predicate, template, kind, comment), the "Replaces actor" toggle, a live template preview, syntax-highlighted predicate editing, identifier/keyword autocomplete, and a sheet for replaying a draft predicate against the recent-requests ring buffer.
 - **`OnePasswordWatcher`** — attaches an `AXObserver` to 1Password, classifies window events as approval dialogs, assembles candidate entries, runs the rule engine, records to the ring buffer, displays the chosen entry, and polls for dismissal.
 - **`ProcessTree`** — pure logic for process enumeration, parent-chain walking, app-boundary detection, code signature verification, CWD lookup, argv/env reads, start-time reads, and Claude Code detection.
@@ -82,6 +84,7 @@ Module responsibilities at a glance:
 - **`RecentRequestsStore`** — ring buffer (default capacity 20) persisted to `recent-requests.json`. Drives the Test Predicate sheet, the "Add from recent" rule template, and is greppable from the command line.
 - **`OverlayPanel`** — non-activating floating `NSPanel` that renders the single chosen entry with chain, CWD, terminal/cmux info, Claude session + last prompt, and "Show Tab" / "Send Message" actions.
 - **`TerminalHelper`** — terminal-app integration: tab title lookup, tab activation, TTY message writes, plus per-terminal keyboard-shortcut hints (e.g. "⌘1") for jumping to the source tab.
+- **`UpdateChecker` / `AppInfo`** — `AppInfo` reads the running bundle's marketing version and holds the repo URL; `UpdateChecker` powers the "Check for Updates…" menu item by fetching GitHub's `/releases/latest`, comparing tags numerically, and reporting up-to-date / update-available / failed. Pure parse/compare/evaluate helpers are separated from the network call so they're unit-testable.
 - **`OPPredicateParser` (ObjC)** — wraps `+[NSPredicate predicateWithFormat:]` in `@try`/`@catch`. Swift can't catch Objective-C exceptions directly, so without this shim a typo in a user-authored predicate would crash the app at parse time.
 
 ## 3. Lifecycle: From Approval to Overlay
@@ -133,9 +136,9 @@ sequenceDiagram
     end
 
     loop every 500ms
-        Watcher->>AX: AX element still valid?
+        Watcher->>AX: AX element still valid? (rescan if stale)
         Watcher->>Watcher: kill(pid, 0) for each tracked PID
-        alt window gone AND all PIDs gone
+        alt window gone for ≥3 ticks OR all PIDs gone
             Watcher->>Overlay: dismiss()
             Watcher->>Watcher: stopDialogPolling()
         end
@@ -151,42 +154,39 @@ Two structural points worth noting up front:
 
 1Password renders its UI in an Electron web view. When a window first appears, the AX tree is often empty or only partially populated, so any content-based detection ("does the dialog body say *Authorize*?") is racy and unreliable.
 
-`OnePasswordWatcher.isApprovalDialog` therefore avoids inspecting dialog contents and instead uses a coarse two-tier filter:
+`OnePasswordWatcher.isApprovalDialog` therefore avoids inspecting dialog contents and delegates the decision to the pure static `isApprovalWindow(role:subrole:title:)`, which classifies *positively* on the window title:
 
-1. **Subrole match** — `AXSubrole == "AXDialog"` is unambiguously an approval dialog.
-2. **Title-based exclusion** — for plain `AXStandardWindow` windows, exclude known non-dialog surfaces by title prefix (case-insensitive substring match): `Lock Screen`, `All Items`, `All Accounts`, `Settings`, `Watchtower`, `Developer`. Anything else — including the generic `1Password` title that both CLI and SSH approvals share — is treated as a candidate.
+1. **Subrole match** — `AXSubrole == "AXDialog"` is unambiguously an approval dialog (GUI approvals).
+2. **Bare-title match** — a plain `AXWindow` is an approval prompt *only* when its title, trimmed of whitespace, equals the bare app name `"1Password"` (case-insensitive). Every persistent 1Password surface is named descriptively — `Quick Access — 1Password`, `<Account> — 1Password`, `Settings`, `Watchtower` — and only the CLI and SSH approval prompts carry the bare `1Password` title.
 
-A candidate window only produces an overlay if `ProcessTree.findTriggerProcesses()` finds at least one running process named `op`, `ssh`, `git`, `scp`, `sftp`, `rsync`, `ssh-keygen`, or `op-ssh-sign`. This is what implicitly distinguishes "real approval dialog" from "any other 1Password window I forgot to exclude" — without trigger processes there's nothing meaningful to show, and the overlay is suppressed.
+Matching the bare title positively (rather than denylisting named surfaces) is the deliberate design: a denylist could never be exhaustive across future or localized surfaces, so Quick Access, account windows, and anything else with a descriptive title are excluded by construction. This replaced an earlier exclusion-by-title-prefix denylist (see the 0.9.0 changelog).
+
+A candidate window only produces an overlay if `ProcessTree.findTriggerProcesses()` finds at least one running process named `op`, `ssh`, `git`, `scp`, `sftp`, `rsync`, `ssh-keygen`, or `op-ssh-sign`. Without trigger processes there's nothing meaningful to show, and the overlay is suppressed.
 
 This split has a consequence: there is no separate codepath for CLI vs SSH-agent approvals. Both result in the same trigger-process scan and the same overlay layout. Multiple trigger processes are collapsed to a single displayed entry by `selectBestCandidate`.
 
 ### 3.3 Dismissal
 
-Dismissal is poll-based rather than event-based. 1Password does not consistently fire `kAXUIElementDestroyedNotification` for its dialogs (the Electron view re-renders asynchronously and can invalidate AX element references), so `OnePasswordWatcher` runs a 500 ms timer that checks two independent conditions:
+Dismissal is poll-based rather than event-based. 1Password does not consistently fire `kAXUIElementDestroyedNotification` for its dialogs (the Electron view re-renders asynchronously and can invalidate AX element references), so `OnePasswordWatcher` runs a 500 ms timer whose per-tick decision lives in the pure static `shouldDismiss(...)`. It combines two independent signals:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
     Idle --> Tracking: dialog detected,<br/>overlay shown
-    Tracking --> Tracking: poll (500ms)<br/>at least one signal alive
-    Tracking --> RescanWindow: AX element invalid
-    RescanWindow --> Tracking: fresh dialog found<br/>(re-bind element)
-    RescanWindow --> Tracking: no dialog,<br/>but a tracked PID is live
-    Tracking --> Dismissed: window gone AND<br/>all trigger PIDs gone
+    Tracking --> Tracking: poll (500ms)<br/>window present → reset tick counter
+    Tracking --> RescanWindow: cached AX element invalid
+    RescanWindow --> Tracking: fresh dialog found<br/>(re-bind, reset counter)
+    RescanWindow --> Tracking: no dialog<br/>(increment window-gone tick counter)
+    Tracking --> Dismissed: window gone ≥3 consecutive ticks<br/>OR all trigger PIDs gone
     Dismissed --> Idle: stopDialogPolling()<br/>overlay.dismiss()
 ```
 
-The two checks:
+The two signals:
 
-1. **Window check** — read `kAXRoleAttribute` on the cached `AXUIElement`. If the call fails, the cached reference is stale — re-enumerate 1Password's windows and re-bind to a fresh approval-dialog element if one still exists. Only conclude the window is gone after the rescan also fails.
-2. **Process check** — for every triggering PID recorded when the overlay was shown, send signal `0` via `kill(pid, 0)`. This delivers no signal but returns whether the process exists. If *all* tracked PIDs are gone, the trigger side of the dialog has resolved.
+1. **Window signal (debounced).** Read `kAXRoleAttribute` on the cached `AXUIElement`. If the call fails, the cached reference is stale — re-enumerate 1Password's windows and re-bind to a fresh approval-dialog element if one still exists. A tick where the window is present (or the rescan re-binds one) resets a counter; a tick where it's gone increments it. The window signal only fires after **3 consecutive gone ticks** (`windowGoneTickThreshold`, ≈1.5 s), which rides out Electron's intermittent AX-element invalidations during re-renders.
+2. **Process signal.** For every triggering PID recorded when the overlay was shown, send signal `0` via `kill(pid, 0)`. This delivers no signal but returns whether the process exists. When the tracked set is non-empty and *all* of it is gone, the trigger side of the dialog has resolved. This fires immediately (no debounce), which is what handles the case where op-who latched onto a 1Password window that never goes AX-gone — e.g. the main window.
 
-**Dismissal requires both checks to agree.** Either signal can lie on its own:
-
-- An Electron-rendered dialog intermittently invalidates its AX element while remaining visible; a still-live trigger process is the corrective evidence.
-- SSH siblings (control-master helper + session, fetch-pack + push-pack) sometimes exit while the approval prompt is still on screen waiting on the user; a still-valid AX window is the corrective evidence.
-
-Tracking *all* surviving candidate PIDs (not just the displayed one) is what makes the process check robust.
+**Dismissal fires when *either* signal fires** (`windowGoneSignal || procsGoneSignal`). The debounce on the window signal — rather than requiring the process signal to corroborate it — is what suppresses false dismissals from a dialog that flickers its AX element while still visible; the process signal independently catches the never-goes-AX-gone case. Tracking *all* surviving candidate PIDs (not just the displayed one) is what keeps the process signal from firing early when one SSH sibling exits while others (and the prompt) are still alive.
 
 There's also a re-detection guard: 1Password fires multiple `AXWindowCreated`/`AXFocusedWindowChanged` events for a single logical approval (empty shell → re-render → real title). When `handleWindowEvent` fires for a PID already in `trackedProcessPIDs`, the watcher refreshes the cached AX element and skips the re-render — the overlay would otherwise appear to flash or relocate.
 
@@ -194,7 +194,7 @@ There's also a re-detection guard: 1Password fires multiple `AXWindowCreated`/`A
 
 ### 4.1 `main.swift` — bootstrap and Accessibility gate
 
-Wires up `NSApplication`, creates the menu-bar status item (a 1Password-style cutout glyph drawn programmatically — see `Self.menuBarIcon()`), and instantiates `RequestRuleStore`, `RecentRequestsStore`, and `OnePasswordWatcher`. Two non-obvious responsibilities:
+Wires up `NSApplication`, creates the menu-bar status item (a 1Password-style cutout glyph drawn programmatically — see `Self.menuBarIcon()`) with its drop-down menu (About op-who, Check for Updates…, Settings…, Quit op-who), and instantiates `RequestRuleStore`, `RecentRequestsStore`, and `OnePasswordWatcher`. "About" shows the running `AppInfo.version`; "Check for Updates…" runs `UpdateChecker` (see §4.13) and reports the result in an alert. Two non-obvious responsibilities:
 
 - **Main menu for Edit shortcuts.** LSUIElement apps don't get a main menu by default, which means text fields in the Settings window never see Cmd-C/V/X/Z (those route through the menu's responder chain). `installMainMenu()` adds a minimal app menu plus an Edit menu so the Settings window's text fields support copy/paste/undo. The menu bar only appears while op-who is the active app — i.e. while Settings is in front — so it doesn't intrude in other apps.
 - **Accessibility trust gate.** Calls `AXIsProcessTrustedWithOptions` with `kAXTrustedCheckOptionPrompt: true`. If permission is missing, shows a one-shot alert directing the user to System Settings and *starts a 2-second polling timer*. When trust flips on, the watcher's `AXObserver` would be permanently inert until restart (registration is gated by trust at the moment of registration), so the polling timer relaunches the bundle automatically via a detached `/bin/sh` helper. No manual reopen needed.
@@ -347,6 +347,12 @@ All operations validate the TTY against `^/dev/ttys\d+$` before any I/O — this
 
 Tab title lookup for unknown terminals: enumerate AX windows for the terminal PID; prefer one whose title contains the short TTY name (e.g. `ttys003`); otherwise return the first non-empty title.
 
+### 4.13 `UpdateChecker` and `AppInfo`
+
+`AppInfo` reads the running bundle's `CFBundleShortVersionString` live (falling back to `"unknown"` outside a bundle, e.g. in tests) and holds the static repo URL. It backs the "About op-who" alert.
+
+`UpdateChecker` backs the "Check for Updates…" menu item. `checkForUpdates(currentVersion:session:completion:)` fetches GitHub's `/repos/stigsb/op-who/releases/latest` (with the `User-Agent` header GitHub requires) and always calls back on the main thread. The parse/compare/decide logic is factored into pure, network-free helpers so it's unit-testable: `parseVersion` accepts an optional leading `v` and rejects non-numeric or negative components; `compare` zero-pads the shorter operand and compares numerically (so `0.10.0 > 0.9.0`); `evaluate(responseData:currentVersion:)` decodes the release JSON and returns `.upToDate`, `.updateAvailable(latest:releaseURL:)`, or `.failed(message:)`. An unparseable *local* version surfaces the available release rather than falsely claiming up-to-date.
+
 ## 5. Process-Chain Walking
 
 `ProcessTree.buildChain(from: pid_t)` is the algorithm at the heart of the app. Given a starting PID, it walks PPID links upward and assembles a `ChainResult`.
@@ -405,9 +411,9 @@ These are the non-obvious decisions a new contributor is most likely to question
 - **Stop the chain at any process that's a registered macOS app.** Rationale: 1Password's own dialog already names the app (Terminal, iTerm2, etc.). Including it in our overlay just adds noise. The `NSWorkspace.runningApplications` lookup is the cheapest reliable way to ask "is this PID a GUI app?".
 - **Stop the chain at known terminal-helper prefixes.** Rationale: iTerm spawns `iTermServer-<version>` processes that aren't NSWorkspace apps but functionally are the terminal. macOS truncates the name at MAXCOMLEN, so it shows up in the overlay as garbage. Recognising the prefix lets us attribute the chain to iTerm and stop.
 - **Drop trigger processes that have no parent chain *and* no TTY.** Rationale: 1Password ships an internal `op` helper that runs as a child of the 1Password app and has no terminal. It's a trigger by name but not by intent. Filtering by "no chain *and* no TTY" excludes it without hardcoding a path or PID.
-- **Detect approval dialogs by window title exclusion, not by content.** Rationale: 1Password's dialog body is rendered in an Electron web view that loads asynchronously. Content-based detection is racy. Title-based filtering combined with the trigger-process scan is robust enough in practice.
+- **Detect approval dialogs by a positive bare-title match, not by content or a denylist.** Rationale: 1Password's dialog body is rendered in an Electron web view that loads asynchronously, so content-based detection is racy. Only CLI/SSH approval prompts carry the bare `1Password` title (every persistent surface is named descriptively), so matching that title positively is exhaustive in a way a denylist of named surfaces could never be — Quick Access, account windows, and future/localized surfaces are excluded by construction. (Earlier versions used a title-prefix denylist; this changed in 0.9.0.)
 - **Detect SSH-agent approvals via co-occurring SSH client processes.** Rationale: 1Password's SSH-agent dialog looks identical to its CLI dialog at the AX level — same title, same role. The differentiator is that an `op` CLI prompt has an `op` process running, whereas an SSH-agent prompt has a `ssh`/`git`/`scp`/`ssh-keygen`/`op-ssh-sign` process running alongside 1Password's internal `op` helper.
-- **Detect dialog dismissal by polling (500 ms), requiring both AX and process signals to agree.** Rationale: 1Password does not reliably fire window-destroyed events for its dialogs, and either signal can lie on its own (Electron invalidates AX elements on re-render; SSH siblings exit while the prompt is still up). Requiring both signals avoids false dismissal in either failure mode. Tracking *all* surviving candidate PIDs (not just the displayed one) is what makes the process-signal check robust.
+- **Detect dialog dismissal by polling (500 ms); dismiss when *either* the debounced window signal or the process signal fires.** Rationale: 1Password does not reliably fire window-destroyed events for its dialogs. The window signal is debounced over 3 consecutive gone-ticks (≈1.5 s) to ride out Electron re-renders that transiently invalidate the AX element, so it no longer needs the process signal to corroborate it. The process signal (all tracked PIDs dead) fires immediately and independently, catching the case where op-who latched onto a window that never goes AX-gone (e.g. 1Password's main window). Tracking *all* surviving candidate PIDs (not just the displayed one) keeps the process signal from firing early when one SSH sibling exits while the prompt is still up.
 - **Suppress overlay re-show when a fresh AX event names a PID we're already polling.** Rationale: 1Password fires multiple `AXWindowCreated`/`AXFocusedWindowChanged` events for a single logical approval. Re-rendering on each event makes the overlay flash or appear to relocate. Same-PID events refresh only the cached AX element.
 - **Walk the chain to find the first non-`/` CWD.** Rationale: the trigger process (`op`, `ssh`) is often spawned with CWD `/` by some shells or wrappers. The user actually cares about the *shell's* CWD — which is one or two hops up. Walking until a non-`/` CWD is found gives the right answer in the common case while still showing `/` honestly when that's all there is.
 - **Use the trigger's own CWD (not bestCWD) for plugin-update detection.** Rationale: Claude's plugin refresh runs `git fetch` with CWD under `~/.claude/plugins/<repo>/`, but the surrounding chain may have a wider CWD. Only the trigger's literal CWD reliably places the request under the plugins tree.
@@ -437,6 +443,8 @@ Tests use Swift Testing (`import Testing`) and run via `swift test`. Coverage fo
 - **`RequestRuleTests`, `RequestSummaryTests`, `PreviewTitleTests`** — rule engine matching, template rendering, placeholder fall-through, the actor + template composition, and the Settings-side preview path.
 - **`PredicateParserTests`, `PredicateLexerTests`, `PredicateContextTests`, `PredicateCompletionsTests`** — predicate parsing (including tilde expansion and exception trapping), tokenisation, KVC key exposure, autocomplete candidate ranking.
 - **`CandidateSelectionTests`** — `foldOpHelper` and `selectBestCandidate` ranking under all kind/start-time combinations.
+- **`ApprovalWindowDetectionTests`, `DialogDismissalTests`** — the two pure decision helpers carved out of `OnePasswordWatcher`: `isApprovalWindow(role:subrole:title:)` (bare-title/`AXDialog` classification, including that former denylist surfaces stay excluded under positive matching) and `shouldDismiss(...)` (the OR-of-signals policy with the window-gone tick threshold and counter reset).
+- **`UpdateCheckerTests`** — `parseVersion` / `compare` (numeric, not lexical, ordering; leading-`v` stripping; malformed and negative rejection) and `evaluate` release-decision outcomes (newer/equal/older tags, malformed tag, garbage JSON, unparseable local version).
 - **`ClaudeContextTests`** — JSONL tail parsing, plugin-update resolution against `known_marketplaces.json`.
 - **`CmuxHelperTests`** — surface-info lookup and the generic-title filter.
 - **`TerminalHelperTests`** — `isValidTTYPath` regex acceptance/rejection across realistic and adversarial inputs.
@@ -446,7 +454,7 @@ Tests use Swift Testing (`import Testing`) and run via `swift test`. Coverage fo
 
 Deliberately *not* unit-tested:
 
-- **AX observer wiring (`OnePasswordWatcher`)** — needs a live 1Password process and a real approval dialog. Validated manually.
+- **AX observer wiring (`OnePasswordWatcher`)** — the C-callback trampoline, observer registration, and live AX reads need a real 1Password process and approval dialog, and are validated manually. The pure decision logic *is* extracted and tested (`isApprovalWindow`, `shouldDismiss` — see above); only the AX plumbing around it is untested.
 - **Code signature checks** — depend on real signed binaries on the host. Validated by running against a real `op` install during release rehearsal.
 - **AppleScript paths in `TerminalHelper`** — depend on Terminal.app / iTerm2 being installed and scripting permissions being granted. Validated manually per terminal.
 - **Overlay layout** — visual; verified by running the app.

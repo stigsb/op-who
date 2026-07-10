@@ -238,7 +238,7 @@ User rules always run first, then built-ins (in their shipped order). Disabling 
 - Disabled built-ins still appear (greyed-out) in the Rules pane so you can re-enable them later.
 - Built-ins are keyed by a stable `builtInID` slug, not by name or UUID — so renaming or rewording a built-in across releases keeps your disabled-state intact.
 
-If you ever want to start over, the Built-in Rules tab has an "Enable all built-ins" affordance, and deleting `rules.json` returns op-who to a fresh-install state on next launch.
+If you ever want to start over, the Rules pane has a "Remove All User Rules" button (built-ins are untouched — re-enable any you disabled by toggling their checkboxes in the table), and deleting `rules.json` returns op-who to a fresh-install state on next launch.
 
 ## See also
 
