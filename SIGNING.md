@@ -1,41 +1,22 @@
 # Release signing
 
-Tags and release artifacts for op-who are signed with the maintainer's SSH key. Two verification paths apply depending on who you are.
+op-who releases are signed at two layers: the **app** is signed with an Apple **Developer ID Application** certificate and notarized by Apple, and release **tags** are signed with the maintainer's SSH key. Different audiences rely on different layers.
 
 ## End users (installing a release)
 
-The trust root is **`https://github.com/stigsb.keys`** — GitHub serves the maintainer's public SSH keys over TLS, anchored to the `stigsb` account. Every other key file (including any `allowed_signers` that may appear in the repo or in a release) is convenience only; **do not** treat them as authoritative.
-
-Each release ships three artifacts (the tarball name encodes the CPU — `arm64` for Apple Silicon, `x86_64` for Intel):
-- `op-who-dev-macos-<arch>.tar.gz` — the package
-- `SHA256SUMS` — checksums of the package
-- `SHA256SUMS.sig` — SSH signature over `SHA256SUMS`
-
-Before extracting the tarball:
+op-who is distributed as a notarized, Developer ID–signed app. The trust anchor for installation is **Apple notarization + Gatekeeper**: macOS verifies the Developer ID signature and the stapled notarization ticket before the app runs. The recommended install is Homebrew:
 
 ```bash
-TMP=$(mktemp -d)
-curl -sf https://github.com/stigsb.keys \
-  | awk -v who="stig@stigbakken.com" '{print who, "namespaces=\"file\"", $0}' \
-  > "$TMP/allowed_signers"
-
-ssh-keygen -Y verify -f "$TMP/allowed_signers" -I stig@stigbakken.com -n file \
-  -s SHA256SUMS.sig < SHA256SUMS
-
-shasum -a 256 -c SHA256SUMS
-rm -rf "$TMP"
+brew install --cask stigsb/tap/op-who
 ```
 
-If the first command prints `Good "file" signature for stig@stigbakken.com` and the second prints `op-who-dev-macos-<arch>.tar.gz: OK`, the tarball is authentic to the maintainer's GitHub-listed key.
+The cask downloads `op-who.zip` from the GitHub Release; Gatekeeper validates the signature and notarization on first launch. The `.pkg` installer (for MDM/Fleet) is signed with a **Developer ID Installer** certificate and notarized the same way.
 
-Threat model: GitHub TLS + integrity of the `stigsb` GitHub account vouch for the signing key. An attacker who replaces the release page cannot make the signature verify unless they also compromise the GitHub account. If you don't trust GitHub or this account, no signature on a release page can help — you would need the key fingerprint out of band.
+You don't need to verify checksums by hand — a tampered or unsigned build won't pass Gatekeeper.
 
-Maintainer signing-key fingerprint (for out-of-band verification):
-```
-SHA256:gVg1WOhQ87/Pw4XSx4juhF6OkocRYTaAG6Gy4M69PzY
-```
+## Contributors / developers (verifying tags)
 
-## Contributors / developers
+Release tags are SSH-signed with the maintainer's key. The trust root is **`https://github.com/stigsb.keys`** — GitHub serves the maintainer's public SSH keys over TLS, anchored to the `stigsb` account.
 
 `.github/allowed_signers` is checked in for local `git verify-tag` convenience. Wire it up once per clone:
 
@@ -43,17 +24,13 @@ SHA256:gVg1WOhQ87/Pw4XSx4juhF6OkocRYTaAG6Gy4M69PzY
 git config gpg.ssh.allowedSignersFile .github/allowed_signers
 ```
 
-`git verify-tag v0.5.0` and `git log --show-signature` will then validate signatures against that file. This is for working on the project — **not** a trust anchor for end users (the file is in the same git history it would otherwise certify).
+`git verify-tag vX.Y.Z` and `git log --show-signature` then validate signatures against that file. This is for working on the project — **not** an end-user trust anchor (the file lives in the same git history it would otherwise certify).
 
-## Producing a signed release
-
-`scripts/package-dev.sh` builds the tarball and invokes `scripts/sign-artifacts.sh`, which writes `SHA256SUMS` and `SHA256SUMS.sig` into `dist/`. Signing requires the maintainer's key to be reachable through an ssh-agent; the script auto-discovers 1Password's agent socket if `SSH_AUTH_SOCK` doesn't already point at an agent that holds the key.
-
-Then upload all three artifacts to the GitHub Release:
-
-```bash
-scripts/upload-dev.sh           # uploads dist/* and publishes
-scripts/upload-dev.sh --draft   # uploads, leaves the release as a draft
+Maintainer signing-key fingerprint (for out-of-band verification):
+```
+SHA256:gVg1WOhQ87/Pw4XSx4juhF6OkocRYTaAG6Gy4M69PzY
 ```
 
-`dist/` after `package-dev.sh` contains exactly the three artifacts to upload: the arch-tagged tarball, `SHA256SUMS`, and `SHA256SUMS.sig`. The release itself (with `## Install` + `## Changes` body) is opened as a draft by `.github/workflows/release.yml` on tag push.
+## Producing a release
+
+Releases are built and published by `.github/workflows/release-notarized.yml` on every `v*` tag push: it hardened-runtime signs the app (Developer ID Application), notarizes and staples it, builds the notarized `.pkg` (Developer ID Installer), publishes the GitHub Release, and updates the Homebrew cask. `scripts/release.sh` reproduces the same notarized artifacts locally. See [CONTRIBUTORS.md](CONTRIBUTORS.md#releasing) for the full flow and the required GitHub Actions secrets.

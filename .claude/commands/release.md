@@ -80,24 +80,17 @@ Show the user the commands to push:
 git push && git push --tags
 ```
 
-Then explain what happens on push:
+Then explain what happens on push — it's fully automated:
 
-1. The `release.yml` workflow runs on the tag and opens a **draft** GitHub Release titled `op-who X.Y.Z` with auto-generated notes.
-2. Build the artifact locally and attach it. While there's no Apple Developer ID cert yet, use the dev-build package — it also produces signed checksums (`SHA256SUMS` and `SHA256SUMS.sig`) that anchor end-user trust at `https://github.com/stigsb.keys`. See `SIGNING.md` for the threat model.
+The tag push triggers `.github/workflows/release-notarized.yml`, which builds, hardened-runtime signs (Developer ID Application), notarizes + staples `op-who.app`, builds the notarized `.pkg` (Developer ID Installer), publishes the GitHub Release with `op-who.zip` + `op-who-<version>.pkg` (an `## Install` section from `.github/release-install-template.md` plus auto-generated `## Changes`), and updates the `op-who` cask in `stigsb/homebrew-tap`.
 
-   ```bash
-   scripts/package-dev.sh
-   scripts/upload-dev.sh             # uploads + publishes (default)
-   # or: scripts/upload-dev.sh --draft  # leave as draft for manual review
-   ```
+There's no manual artifact build or upload. Once the workflow finishes, verify the release:
 
-   `package-dev.sh` puts exactly three files in `dist/`: the arch-tagged tarball (`op-who-dev-macos-<arch>.tar.gz`), `SHA256SUMS`, and `SHA256SUMS.sig`. `upload-dev.sh` uploads all three to the matching tag's draft release and (by default) flips it to published. The release body was already filled in by `.github/workflows/release.yml` when the tag was pushed — a `## Install` section followed by an auto-generated `## Changes` section.
+```bash
+gh run watch                 # follow the release-notarized run, or:
+gh release view "vX.Y.Z"     # confirm op-who.zip + .pkg are attached
+```
 
-   Once an Apple Developer ID cert is configured and the relevant secrets are in place, switch over to the notarized workflow (`release-notarized.yml`) and use `scripts/release.sh` instead. The signed-checksums flow should remain in place there too — notarization covers Gatekeeper, not artifact tampering at rest.
-3. Review the release notes in the GitHub UI, edit if needed, then publish:
-
-   ```bash
-   gh release edit "vX.Y.Z" --draft=false
-   ```
+If the run fails, check that the signing/notary secrets are present (see CONTRIBUTORS.md → Releasing → "Required GitHub Actions secrets").
 
 If the user hasn't pushed yet (e.g. they want to review the commit first), stop after Step 4 and let them push when ready.

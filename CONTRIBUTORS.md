@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Swift Package Manager project with a library target (`OpWhoLib`) and thin executable (`op-who`). Non-sandboxed (needs Accessibility API access). Distributed as a signed/notarized `.app` bundle.
+Swift Package Manager project with three targets: an Objective-C shim (`OpWhoObjCShim`) that traps NSPredicate parse exceptions, a library (`OpWhoLib`) holding all logic, and a thin executable (`op-who`) that wires up `NSApplication` and the Settings UI. Non-sandboxed (needs Accessibility API access). Distributed as a signed/notarized `.app` bundle.
 
 For the full architecture overview — components, data flow, dialog lifecycle state machine, process-chain walking algorithm, and design rationale — see [docs/architecture.md](docs/architecture.md).
 
@@ -10,8 +10,10 @@ Source layout:
 
 ```
 Sources/
+  OpWhoObjCShim/      — ObjC shim: NSPredicate exception trapping
   OpWhoLib/           — library target (all logic)
-  op-who/main.swift   — NSApplication setup, status bar item, accessibility check
+  op-who/main.swift   — NSApplication setup, status bar item + menu, accessibility check
+  op-who/*.swift      — Settings UI (ConfigWindowController, RulesPane, GeneralPane, …)
 Tests/                — Swift Testing unit tests
 ```
 
@@ -57,7 +59,7 @@ Some macOS versions require the self-signed cert to be a *trusted* root for code
 swift test
 ```
 
-Tests use Swift Testing (`import Testing`). Covers pure logic: ProcessNode display names, chain formatting, path tidying, TTY validation, process enumeration.
+Tests use Swift Testing (`import Testing`). Coverage centers on the pure logic: the rule engine and template rendering, predicate parsing/lexing/completion, candidate folding and ranking, approval-window classification and the dismissal decision, update-version comparison, Claude/cmux context, process-chain formatting, and TTY validation. See [docs/architecture.md §8](docs/architecture.md#8-testing-strategy) for the full breakdown and what's deliberately left to manual validation.
 
 ### Running tests without full Xcode
 
@@ -77,7 +79,7 @@ swift test \
 
 ## Releasing
 
-A release flows through four steps: cut a signed tag, push, build local artifacts, upload + publish. Until a Developer ID Application certificate is in place, releases are self-signed dev builds anchored at `https://github.com/stigsb.keys` — see [SIGNING.md](SIGNING.md) for the trust model.
+Releases are notarized, Developer ID–signed builds published by CI. The flow: cut a signed tag, push it, and `.github/workflows/release-notarized.yml` builds, signs, notarizes, publishes the GitHub Release (`.zip` + `.pkg`), and updates the Homebrew cask — no manual artifact upload.
 
 ### 1. Cut the release commit and signed tag
 
@@ -93,7 +95,7 @@ The script bumps or sets `CFBundleShortVersionString` and `CFBundleVersion` in `
 
 Prerequisites:
 - `user.signingkey` and (for SSH) `gpg.format=ssh` configured in git.
-- The signing key must be reachable through an ssh-agent. 1Password's agent works — `scripts/sign-artifacts.sh` auto-discovers its socket if `SSH_AUTH_SOCK` doesn't already hold the key.
+- The signing key must be reachable through an ssh-agent (`git tag -s` signs via `SSH_AUTH_SOCK`). 1Password's agent works — point `SSH_AUTH_SOCK` at the agent that holds the key.
 
 One-time setup so `git verify-tag` works locally:
 
@@ -107,42 +109,29 @@ git config gpg.ssh.allowedSignersFile .github/allowed_signers
 git push && git push --tags
 ```
 
-The push triggers `.github/workflows/release.yml`, which opens a **draft** GitHub Release titled `op-who X.Y.Z` with auto-generated notes. The workflow does not build or upload anything — artifact assembly happens locally in step 3.
+The tag push triggers `.github/workflows/release-notarized.yml`, which runs on `macos-latest` and:
 
-### 3. Build and sign artifacts
+- builds and hardened-runtime signs `op-who.app` with the **Developer ID Application** cert,
+- notarizes + staples it and zips it to `op-who.zip`,
+- builds the notarized `op-who-<version>.pkg` (**Developer ID Installer** cert) via `scripts/build-pkg.sh`,
+- publishes the GitHub Release with both artifacts and an `## Install` section from `.github/release-install-template.md`,
+- updates the `op-who` cask in `stigsb/homebrew-tap`.
+
+That's the whole release — there's no manual build or upload step.
+
+#### Required GitHub Actions secrets
+
+`DEVELOPER_ID_CERTIFICATE_P12` (+ `_PASSWORD`) for the app, `DEVELOPER_ID_INSTALLER_P12` (+ `_PASSWORD`) for the pkg, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, `NOTARY_TEAM_ID`, and `TAP_GITHUB_TOKEN` (push access to `stigsb/homebrew-tap`). See [docs/cert-sign-guide.md](docs/cert-sign-guide.md) for how these are produced and configured.
+
+### Building a release locally (optional)
+
+CI is the source of truth, but you can produce the exact notarized artifacts on your own Mac — handy for testing before you tag:
 
 ```bash
-scripts/package-dev.sh
+scripts/release.sh
 ```
 
-This produces three files in `dist/`:
-- `op-who-dev-macos-<arch>.tar.gz` — the dev-build package (app + cert + `install.sh`), where `<arch>` is the host CPU (`arm64` or `x86_64` from `uname -m`)
-- `SHA256SUMS` — checksums of every top-level file in `dist/`
-- `SHA256SUMS.sig` — SSH signature over `SHA256SUMS`
-
-### 4. Upload and publish
-
-```bash
-scripts/upload-dev.sh           # uploads dist/* and publishes the release
-scripts/upload-dev.sh --draft   # uploads but leaves the release as a draft
-```
-
-The script defaults to publishing (`draft=false`). The draft release itself was opened by `.github/workflows/release.yml` on tag push, with `## Install` instructions (from `.github/release-install-template.md`) and a `## Changes` section auto-generated from PR/commit history. Pass `--draft` if you want to review or edit the notes in the GitHub UI before flipping the switch.
-
-### Release artifacts: `.zip` (Homebrew) and `.pkg` (Fleet/MDM)
-
-Each release produces two distributables from the same signed, notarized `op-who.app`:
-
-- **`op-who.zip`** — drag-install artifact for the Homebrew cask (`stigsb/tap`). Signed with the **Developer ID Application** cert, notarized, stapled.
-- **`op-who-<version>.pkg`** — installer for MDM/Fleet software distribution. Signed with the **Developer ID Installer** cert (and notarized). Fleet installs it non-interactively. Beyond dropping `op-who.app` into `/Applications`, the pkg installs a login LaunchAgent (`packaging/launchd/com.stigbakken.op-who.plist`) to `/Library/LaunchAgents` and runs `packaging/scripts/postinstall`, which boots the agent for the logged-in user so a silent push takes effect without a logout. Build it with `scripts/build-pkg.sh` (called automatically by `scripts/release.sh`).
-
-  Accessibility (and Apple Events for Terminal/iTerm2) can be pre-granted on managed Macs via the PPPC profile in the `fleet-config` repo — keyed on Team ID `HZ76GWS9YM`, so it only matches Developer ID–signed builds.
-
-### When the Apple Developer ID cert lands
-
-`.github/workflows/release-notarized.yml` carries the full build → hardened-runtime sign → notarize → publish → Homebrew tap flow. It's gated behind `workflow_dispatch` until the maintainer has the Developer ID **Application** *and* **Installer** certificates plus the GitHub Actions secrets (`DEVELOPER_ID_CERTIFICATE_P12`, `DEVELOPER_ID_CERTIFICATE_PASSWORD`, `DEVELOPER_ID_INSTALLER_P12`, `DEVELOPER_ID_INSTALLER_PASSWORD`, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, `NOTARY_TEAM_ID`, `TAP_GITHUB_TOKEN`).
-
-For local notarization, store an app-specific-password credential once (the scripts use the `op-who` profile by default):
+It builds, hardened-runtime signs, notarizes, staples, and zips `op-who.app`, and builds the notarized `.pkg`. Store the notary credential once (the scripts use the `op-who` profile by default):
 
 ```bash
 xcrun notarytool store-credentials "op-who" \
@@ -150,22 +139,23 @@ xcrun notarytool store-credentials "op-who" \
   --password <app-specific-password>   # from appleid.apple.com
 ```
 
-When the secrets are ready:
-1. Re-enable the tag trigger in `release-notarized.yml` (swap `workflow_dispatch:` back to `push: tags: ['v*']`).
-2. Retire or repurpose `release.yml` so a single workflow handles each tag.
-3. Use `scripts/release.sh` locally for full hardened-runtime + notarized + stapled builds (produces both the `.zip` and the `.pkg`).
+### Release artifacts: `.zip` (Homebrew) and `.pkg` (Fleet/MDM)
 
-The signed-checksums trust loop should stay in place even then — notarization addresses Gatekeeper, not artifact tampering at rest.
+Each release produces two distributables from the same signed, notarized `op-who.app`:
 
-See [docs/cert-sign-guide.md](docs/cert-sign-guide.md) for cert setup and CI secret configuration.
+- **`op-who.zip`** — drag-install artifact for the Homebrew cask (`stigsb/homebrew-tap`, installed as `stigsb/tap`). Signed with the **Developer ID Application** cert, notarized, stapled. CI regenerates the cask on each tag.
+- **`op-who-<version>.pkg`** — installer for MDM/Fleet software distribution. Signed with the **Developer ID Installer** cert (and notarized). Fleet installs it non-interactively. Beyond dropping `op-who.app` into `/Applications`, the pkg installs a login LaunchAgent (`packaging/launchd/com.stigbakken.op-who.plist`) to `/Library/LaunchAgents` and runs `packaging/scripts/postinstall`, which boots the agent for the logged-in user so a silent push takes effect without a logout. Built by `scripts/build-pkg.sh` (invoked by both `release-notarized.yml` and `scripts/release.sh`).
+
+  Accessibility (and Apple Events for Terminal/iTerm2) can be pre-granted on managed Macs via the PPPC profile in the `fleet-config` repo — keyed on Team ID `HZ76GWS9YM`, so it only matches Developer ID–signed builds.
+
+See [docs/cert-sign-guide.md](docs/cert-sign-guide.md) for certificate setup and how the CI secrets are produced.
 
 ## Install (end users)
 
-Until the notarized Homebrew path is live, op-who is distributed as a self-signed dev build. End users verify against `https://github.com/stigsb.keys` per the recipient flow in [SIGNING.md](SIGNING.md), then run the installer from inside the unpacked tarball.
-
-After the Developer ID cert and Homebrew tap are wired up, the install path will become:
+op-who is a notarized, Developer ID–signed app installed via Homebrew:
 
 ```bash
-brew tap stigsb/tap
 brew install --cask stigsb/tap/op-who
 ```
+
+See the [README](README.md#install) for the manual `.zip` / `.pkg` alternatives.

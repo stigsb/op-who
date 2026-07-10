@@ -157,7 +157,7 @@ methods.
 
 ## Part 3: GitHub Actions Workflow
 
-Create `.github/workflows/release.yml`:
+The canonical release workflow lives at [`.github/workflows/release-notarized.yml`](../.github/workflows/release-notarized.yml); it runs on every `v*` tag push. The listing below is the annotated reference implementation — the checked-in workflow is the source of truth if the two ever drift.
 
 ```yaml
 name: Release

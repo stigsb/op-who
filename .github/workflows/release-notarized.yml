@@ -1,13 +1,17 @@
 name: Release (notarized)
 
-# Disabled tag trigger: this workflow expects DEVELOPER_ID_CERTIFICATE_P12 (+
-# _PASSWORD) for the .app, DEVELOPER_ID_INSTALLER_P12 (+ _PASSWORD) for the
-# .pkg, NOTARY_APPLE_ID, NOTARY_PASSWORD, NOTARY_TEAM_ID, and TAP_GITHUB_TOKEN
-# secrets, which aren't configured yet. Re-add the `push: tags: ['v*']` trigger
-# once the Developer ID Application + Installer certificates are available and
-# the secrets are populated. Until then it can be invoked manually for testing.
+# Runs on every `v*` tag push: builds, hardened-runtime signs (Developer ID
+# Application), notarizes + staples the .app, builds the notarized .pkg
+# (Developer ID Installer), publishes the GitHub Release with both artifacts,
+# and updates the stigsb/homebrew-tap cask. Requires these Actions secrets:
+# DEVELOPER_ID_CERTIFICATE_P12 (+ _PASSWORD), DEVELOPER_ID_INSTALLER_P12
+# (+ _PASSWORD), NOTARY_APPLE_ID, NOTARY_PASSWORD, NOTARY_TEAM_ID, and
+# TAP_GITHUB_TOKEN. workflow_dispatch is kept for manual re-runs/testing.
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -118,6 +122,24 @@ jobs:
         id: sha
         run: echo "sha256=$(shasum -a 256 .build/op-who.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
+      - name: Compose release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          # Auto-generated change notes, with the default "## What's Changed"
+          # heading renamed to "## Changes".
+          AUTO=$(gh api --method POST "/repos/${REPO}/releases/generate-notes" \
+              -f tag_name="$TAG" --jq '.body' | sed '1s/^## .*/## Changes/')
+          # Compose: ## Install (static template, placeholders filled) + changes.
+          BODY_FILE="$RUNNER_TEMP/body.md"
+          sed -e "s|__REPO__|${REPO}|g" -e "s|__TAG__|${TAG}|g" \
+              .github/release-install-template.md > "$BODY_FILE"
+          printf '\n%s\n' "$AUTO" >> "$BODY_FILE"
+          echo "body_file=$BODY_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,7 +148,7 @@ jobs:
             .build/op-who.zip \
             ".build/op-who-${{ steps.version.outputs.version }}.pkg" \
             --title "op-who ${{ steps.version.outputs.version }}" \
-            --generate-notes
+            --notes-file "${{ steps.notes.outputs.body_file }}"
 
       - name: Update Homebrew cask
         env:

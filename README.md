@@ -15,24 +15,19 @@ When 1Password shows its approval dialog, op-who pops up a floating overlay show
 
 1Password's approval dialog tells you *which app* is requesting access, but not *which terminal session* or *which command* started it. If you have multiple terminals open running builds, git operations, or Claude Code sessions, you're left guessing. op-who fills in the missing context so you can approve (or deny) with confidence.
 
-## Install (early access)
+## Install
 
-> op-who is currently distributed as a **self-signed dev build** pending an Apple Developer ID certificate and notarization. Trust is anchored at `https://github.com/stigsb.keys` (TLS + GitHub account integrity). See [SIGNING.md](SIGNING.md) for the threat model.
-
-Each release ships a tarball named for your CPU — `op-who-dev-macos-arm64.tar.gz` for Apple Silicon, `op-who-dev-macos-x86_64.tar.gz` for Intel — alongside `SHA256SUMS` and `SHA256SUMS.sig`. Download all three from the [latest release](https://github.com/stigsb/op-who/releases/latest), verify the signature and checksums per [SIGNING.md](SIGNING.md), then:
+op-who is a notarized, Developer ID–signed macOS app. Install it with [Homebrew](https://brew.sh):
 
 ```bash
-ARCH=$(uname -m)
-tar xzf "op-who-dev-macos-${ARCH}.tar.gz"
-cd "op-who-dev-macos-${ARCH}"
-./install.sh
+brew install --cask stigsb/tap/op-who
 ```
 
-The bundled `install.sh` imports the developer certificate into your login keychain, copies `op-who.app` to `/Applications`, strips the quarantine attribute, and prompts you to grant Accessibility — a one-time manual step macOS does not allow to be scripted.
+`brew upgrade --cask op-who` keeps it current.
 
-After install, look for the op-who icon in your menu bar. When 1Password shows an approval dialog, the overlay appears next to it.
+Prefer a manual install? Download `op-who.zip` from the [latest release](https://github.com/stigsb/op-who/releases/latest), unzip it, and drag `op-who.app` to `/Applications`. For MDM/Fleet deployment, each release also ships a signed `op-who-<version>.pkg` installer.
 
-When Apple-notarized builds are available, the install path will move to a Homebrew tap.
+After install, look for the op-who icon in your menu bar and grant Accessibility once when prompted (System Settings → Privacy & Security → Accessibility). When 1Password shows an approval dialog, the overlay appears next to it.
 
 ## Requirements
 
