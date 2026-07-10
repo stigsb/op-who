@@ -123,7 +123,7 @@ That's the whole release — there's no manual build or upload step.
 
 These live in the **`release` GitHub Environment**, not as repo-level secrets. The environment's deployment policy only permits the `v*` tag and the `main` branch, so a pull request — from a fork or an in-repo branch — can never run a workflow that reads them. Set each with `gh secret set <NAME> --env release`:
 
-`DEVELOPER_ID_CERTIFICATE_P12` (+ `_PASSWORD`) for the app, `DEVELOPER_ID_INSTALLER_P12` (+ `_PASSWORD`) for the pkg, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, and `TAP_GITHUB_TOKEN` (push access to `stigsb/homebrew-tap`). The Apple Team ID isn't a secret — it's a public `env.NOTARY_TEAM_ID` literal in the workflow. See [docs/cert-sign-guide.md](docs/cert-sign-guide.md) for how these are produced and configured.
+`DEVELOPER_ID_CERTIFICATE_P12` (+ `_PASSWORD`) for the app, `DEVELOPER_ID_INSTALLER_P12` (+ `_PASSWORD`) for the pkg, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, and `TAP_GITHUB_TOKEN` (a fine-grained PAT scoped to `stigsb/homebrew-tap` only, **Contents: read and write** — nothing else; the built-in `GITHUB_TOKEN` can't reach that repo). The Apple Team ID isn't a secret — it's a public `env.NOTARY_TEAM_ID` literal in the workflow. See [docs/cert-sign-guide.md](docs/cert-sign-guide.md) for how these are produced and configured.
 
 ### Building a release locally (optional)
 

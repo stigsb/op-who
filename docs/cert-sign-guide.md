@@ -106,7 +106,7 @@ the Application cert in Part 1 (it signs the `.pkg`).
 | `DEVELOPER_ID_INSTALLER_PASSWORD`   | Password for that `.p12`                                    |
 | `NOTARY_APPLE_ID`                   | Your Apple ID email                                         |
 | `NOTARY_PASSWORD`                   | App-specific password (see section 2.3)                     |
-| `TAP_GITHUB_TOKEN`                  | PAT with push access to `stigsb/homebrew-tap`               |
+| `TAP_GITHUB_TOKEN`                  | Fine-grained PAT, `stigsb/homebrew-tap` only, Contents: R/W |
 
 The Apple **Team ID** (`HZ76GWS9YM`) is *not* a secret — it's embedded in every Developer ID–signed binary and in the public certificate — so it lives as the `env.NOTARY_TEAM_ID` literal in the workflow, not in the environment.
 
