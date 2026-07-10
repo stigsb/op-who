@@ -274,7 +274,7 @@ public enum ProcessTree {
                 let snippet = i + 1 < argv.count ? argv[i + 1] : ""
                 return ScriptInfo(
                     interpreter: interpreter,
-                    scriptName: "-c " + truncateSnippet(snippet),
+                    scriptName: "-c " + truncateSnippet(redactString(snippet)),
                     scriptPath: nil
                 )
             }
@@ -283,7 +283,7 @@ public enum ProcessTree {
                     let snippet = i + 1 < argv.count ? argv[i + 1] : ""
                     return ScriptInfo(
                         interpreter: interpreter,
-                        scriptName: "-c " + truncateSnippet(snippet),
+                        scriptName: "-c " + truncateSnippet(redactString(snippet)),
                         scriptPath: nil
                     )
                 }
@@ -304,7 +304,7 @@ public enum ProcessTree {
                 let snippet = i + 1 < argv.count ? argv[i + 1] : ""
                 return ScriptInfo(
                     interpreter: interpreter,
-                    scriptName: "-e " + truncateSnippet(snippet),
+                    scriptName: "-e " + truncateSnippet(redactString(snippet)),
                     scriptPath: nil
                 )
             }
@@ -313,7 +313,7 @@ public enum ProcessTree {
                 let snippet = i + 1 < argv.count ? argv[i + 1] : ""
                 return ScriptInfo(
                     interpreter: interpreter,
-                    scriptName: "-e " + truncateSnippet(snippet),
+                    scriptName: "-e " + truncateSnippet(redactString(snippet)),
                     scriptPath: nil
                 )
             }

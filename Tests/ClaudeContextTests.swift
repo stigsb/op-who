@@ -77,6 +77,42 @@ struct ClaudeContextTests {
         #expect(ctx?.lastUserPrompt == nil)
     }
 
+    @Test func redactsSecretInRelevantCommand() {
+        let secret = "ghp_" + String(repeating: "a", count: 36)
+        let blob = jsonl([
+            [
+                "type": "assistant",
+                "message": [
+                    "role": "assistant",
+                    "content": [[
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": ["command": "op item create TOKEN=\(secret)"],
+                    ]],
+                ],
+            ]
+        ])
+        let ctx = parseClaudeContext(jsonlTail: blob, sessionID: "s")
+        #expect(ctx?.lastRelevantCommand?.contains("‹redacted›") == true)
+        #expect(ctx?.lastRelevantCommand?.contains(secret) == false)
+    }
+
+    @Test func redactsSecretInUserPrompt() {
+        let secret = "ghp_" + String(repeating: "b", count: 36)
+        let blob = jsonl([
+            [
+                "type": "user",
+                "message": [
+                    "role": "user",
+                    "content": "here is my token \(secret) please use it",
+                ],
+            ]
+        ])
+        let ctx = parseClaudeContext(jsonlTail: blob, sessionID: "s")
+        #expect(ctx?.lastUserPrompt?.contains("‹redacted›") == true)
+        #expect(ctx?.lastUserPrompt?.contains(secret) == false)
+    }
+
     @Test func picksNewestRelevantCommand() {
         // Older command is git fetch, newer is op item list — newer wins.
         let blob = jsonl([

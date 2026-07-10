@@ -217,7 +217,7 @@ public class OnePasswordWatcher {
             // `git` triggers that aren't network-capable (`git show`, `git log`,
             // etc.) can never have prompted a 1Password SSH approval, so they
             // are noise — drop them before they hit the overlay.
-            let triggerArgv = measure("processArgv[\(triggerPID)]") { ProcessTree.processArgv(pid: triggerPID) }
+            let triggerArgv = redactArgv(measure("processArgv[\(triggerPID)]") { ProcessTree.processArgv(pid: triggerPID) })
             if triggerNode.name == "git", !isRemoteGitSubcommand(argv: triggerArgv) {
                 Log.watcher.info("dropped pid=\(triggerPID, privacy: .public) reason=git-non-network argv=\(triggerArgv.joined(separator: " "), privacy: .public)")
                 continue

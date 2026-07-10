@@ -253,7 +253,7 @@ private let knownPatternRules: [PatternRule] = [
     rule("eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"),
     rule("-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     rule("(?i)(bearer\\s+)[A-Za-z0-9._-]{8,}", keepPrefix: true),
-    rule("(://[^/\\s:@]+:)[^/\\s@]+@", keepPrefix: true),
+    rule("(://[^/\\s:@]+:)[^/\\s@]+", keepPrefix: true),
 ].compactMap { $0 }
 
 /// Replace any substring matching a known secret-token shape with the
