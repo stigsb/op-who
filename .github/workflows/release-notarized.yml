@@ -7,6 +7,10 @@ name: Release (notarized)
 # DEVELOPER_ID_CERTIFICATE_P12 (+ _PASSWORD), DEVELOPER_ID_INSTALLER_P12
 # (+ _PASSWORD), NOTARY_APPLE_ID, NOTARY_PASSWORD, NOTARY_TEAM_ID, and
 # TAP_GITHUB_TOKEN. workflow_dispatch is kept for manual re-runs/testing.
+#
+# The signing/notary/tap secrets live in the `release` GitHub Environment,
+# whose deployment policy only permits the `v*` tag and the `main` branch —
+# so a pull request (from a fork or a branch) can never run with them.
 
 on:
   push:
@@ -20,6 +24,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    # Gates the secrets below to the v*-tag / main refs allowed by the
+    # environment's deployment-branch policy.
+    environment: release
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 

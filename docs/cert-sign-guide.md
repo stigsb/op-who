@@ -90,31 +90,52 @@ it on the runner.
 5. Set a strong password when prompted. You will need this password in CI.
 6. Save the file (e.g., `developer-id.p12`).
 
-### 2.2 Store in GitHub Secrets
+### 2.2 Store the secrets in the `release` environment
 
-In your repository's **Settings > Secrets and variables > Actions**, create
-these secrets:
+The release workflow reads its secrets from a GitHub Actions **Environment**
+named `release`, whose deployment policy only permits the `v*` tag and the
+`main` branch — so a pull request (from a fork or an in-repo branch) can never
+run a workflow that reads them. Export the **Installer** cert the same way as
+the Application cert in Part 1 (it signs the `.pkg`).
 
-| Secret Name                     | Value                                                     |
-| ------------------------------- | --------------------------------------------------------- |
-| `DEVELOPER_ID_CERT_BASE64`     | Base64-encoded `.p12` file (see below)                    |
-| `DEVELOPER_ID_CERT_PASSWORD`   | The password you set when exporting                       |
-| `NOTARYTOOL_APPLE_ID`          | Your Apple ID email                                       |
-| `NOTARYTOOL_PASSWORD`          | An app-specific password (see section 2.3)                |
-| `NOTARYTOOL_TEAM_ID`           | Your 10-character Apple Team ID                           |
+| Secret Name                         | Value                                                       |
+| ----------------------------------- | ----------------------------------------------------------- |
+| `DEVELOPER_ID_CERTIFICATE_P12`      | Base64-encoded Developer ID **Application** `.p12`          |
+| `DEVELOPER_ID_CERTIFICATE_PASSWORD` | Password for that `.p12`                                    |
+| `DEVELOPER_ID_INSTALLER_P12`        | Base64-encoded Developer ID **Installer** `.p12`            |
+| `DEVELOPER_ID_INSTALLER_PASSWORD`   | Password for that `.p12`                                    |
+| `NOTARY_APPLE_ID`                   | Your Apple ID email                                         |
+| `NOTARY_PASSWORD`                   | App-specific password (see section 2.3)                     |
+| `NOTARY_TEAM_ID`                    | Your 10-character Apple Team ID (`HZ76GWS9YM`)              |
+| `TAP_GITHUB_TOKEN`                  | PAT with push access to `stigsb/homebrew-tap`               |
 
-To base64-encode the `.p12` file:
+Create the environment and its deployment policy once (needs repo admin):
 
 ```bash
-base64 -i developer-id.p12 | pbcopy
+gh api --method PUT repos/stigsb/op-who/environments/release --input - <<'JSON'
+{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+JSON
+gh api --method POST repos/stigsb/op-who/environments/release/deployment-branch-policies -f name='v*' -f type='tag'
+gh api --method POST repos/stigsb/op-who/environments/release/deployment-branch-policies -f name='main' -f type='branch'
 ```
 
-Paste the clipboard contents into the `DEVELOPER_ID_CERT_BASE64` secret.
-
-After creating the secrets, **securely delete** the `.p12` file from disk:
+Then store each secret **in the environment** (`--env release`):
 
 ```bash
-rm -P developer-id.p12
+gh secret set DEVELOPER_ID_CERTIFICATE_P12   --env release < <(base64 -i DeveloperIDApplication.p12)
+gh secret set DEVELOPER_ID_CERTIFICATE_PASSWORD --env release
+gh secret set DEVELOPER_ID_INSTALLER_P12     --env release < <(base64 -i DeveloperIDInstaller.p12)
+gh secret set DEVELOPER_ID_INSTALLER_PASSWORD --env release
+gh secret set NOTARY_APPLE_ID  --env release
+gh secret set NOTARY_PASSWORD  --env release
+gh secret set NOTARY_TEAM_ID   --env release
+gh secret set TAP_GITHUB_TOKEN --env release
+```
+
+After storing them, **securely delete** the exported `.p12` files:
+
+```bash
+rm -P DeveloperIDApplication.p12 DeveloperIDInstaller.p12
 ```
 
 ### 2.3 Create an App-Specific Password
@@ -126,8 +147,8 @@ password:
    Security** > **App-Specific Passwords**.
 2. Click **Generate an app-specific password**.
 3. Name it something like `op-who-notarization`.
-4. Copy the generated password and store it as the `NOTARYTOOL_PASSWORD`
-   GitHub secret.
+4. Copy the generated password and store it as the `NOTARY_PASSWORD`
+   secret in the `release` environment (`gh secret set NOTARY_PASSWORD --env release`).
 
 Note: If your organization uses Managed Apple IDs, app-specific passwords may
 be disabled. In that case, use an **App Store Connect API Key** instead (see
@@ -157,123 +178,7 @@ methods.
 
 ## Part 3: GitHub Actions Workflow
 
-The canonical release workflow lives at [`.github/workflows/release-notarized.yml`](../.github/workflows/release-notarized.yml); it runs on every `v*` tag push. The listing below is the annotated reference implementation — the checked-in workflow is the source of truth if the two ever drift.
-
-```yaml
-name: Release
-
-on:
-  push:
-    tags:
-      - "v*"
-
-jobs:
-  build-sign-notarize:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Import signing certificate
-        env:
-          CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
-        run: |
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
-
-          # Decode certificate
-          echo "$CERT_BASE64" | base64 --decode > "$CERT_PATH"
-
-          # Create a temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import certificate into keychain
-          security import "$CERT_PATH" \
-            -P "$CERT_PASSWORD" \
-            -A \
-            -t cert \
-            -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-
-          # Allow codesign to access the keychain
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Add temporary keychain to search list
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
-
-      - name: Build release
-        run: swift build -c release
-
-      - name: Sign with hardened runtime
-        run: |
-          IDENTITY=$(security find-identity -v -p codesigning \
-            | grep "Developer ID Application" \
-            | head -1 \
-            | sed 's/.*"\(.*\)".*/\1/')
-
-          codesign --force --options runtime \
-            --entitlements release.entitlements \
-            --sign "$IDENTITY" \
-            .build/release/op-who
-
-          codesign --verify --verbose=2 .build/release/op-who
-
-      - name: Package
-        run: |
-          mkdir -p .build/release-stage
-          cp .build/release/op-who .build/release-stage/
-          ditto -c -k --keepParent .build/release-stage/op-who .build/op-who.zip
-
-      - name: Notarize
-        env:
-          # Option A: App-specific password
-          NOTARYTOOL_APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
-          NOTARYTOOL_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
-          NOTARYTOOL_TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
-          # Option B: API key (uncomment and remove Option A if using API key)
-          # NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
-          # NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          # NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
-        run: |
-          # Option A: App-specific password
-          xcrun notarytool submit .build/op-who.zip \
-            --apple-id "$NOTARYTOOL_APPLE_ID" \
-            --password "$NOTARYTOOL_PASSWORD" \
-            --team-id "$NOTARYTOOL_TEAM_ID" \
-            --wait
-
-          # Option B: API key (uncomment and remove Option A if using API key)
-          # API_KEY_PATH="$RUNNER_TEMP/api-key.p8"
-          # echo "$NOTARY_API_KEY" > "$API_KEY_PATH"
-          # xcrun notarytool submit .build/op-who.zip \
-          #   --key "$API_KEY_PATH" \
-          #   --key-id "$NOTARY_API_KEY_ID" \
-          #   --issuer "$NOTARY_API_ISSUER_ID" \
-          #   --wait
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            .build/op-who.zip#op-who-macos.zip
-
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
-          if [ -f "$KEYCHAIN_PATH" ]; then
-            security delete-keychain "$KEYCHAIN_PATH"
-          fi
-```
+The release workflow is [`.github/workflows/release-notarized.yml`](../.github/workflows/release-notarized.yml) — the source of truth, so it isn't duplicated here. It runs on every `v*` tag push, reads its secrets from the `release` environment (§2.2), and imports the Application + Installer certs, signs with a hardened runtime, notarizes and staples the `.app`, builds the notarized `.pkg`, publishes the release, and updates the Homebrew cask.
 
 ## Part 4: Local Setup for `scripts/release.sh`
 
