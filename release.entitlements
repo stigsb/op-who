@@ -2,5 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- op-who sends Apple Events (NSAppleScript) to Terminal/iTerm2 to focus
+	     the triggering tab. Under the hardened runtime these sends are blocked
+	     with errAEEventNotPermitted (-1743) — and no TCC consent prompt appears
+	     — unless this entitlement is present. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 </dict>
 </plist>
