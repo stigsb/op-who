@@ -144,8 +144,9 @@
         <li><strong><code>op</code> CLI</strong> — executable path resolved and code signature checked; verified binaries shown in green, unverified in orange.</li>
         <li><strong>TTY paths</strong> — validated against <code>/dev/ttys[0-9]+</code> before any read/write operation.</li>
         <li><strong>TTY messages</strong> — only written when you explicitly click "Send Message" in the overlay.</li>
+        <li><strong>Secret redaction</strong> — argv, interpreter inline-command snippets, and Claude Code context are scrubbed at capture (<code>op</code> password fields, known token shapes for AWS / GitHub / Slack / JWT / PEM / Bearer / URL passwords, and high-entropy blobs become <code>‹redacted›</code>) before anything is shown, logged, matched against rules, or persisted.</li>
       </ul>
-      <p>It runs as a menu bar app (<code>LSUIElement</code>) and is non-sandboxed because it must enumerate other processes and read their working directories. It never reads secret values — only process metadata. Release-artifact trust is documented in <a href="https://github.com/stigsb/op-who/blob/main/SIGNING.md">SIGNING.md</a>.</p>
+      <p>It runs as a menu bar app (<code>LSUIElement</code>) and is non-sandboxed because it must enumerate other processes and read their working directories. Release-artifact trust is documented in <a href="https://github.com/stigsb/op-who/blob/main/SIGNING.md">SIGNING.md</a>.</p>
     </div>
   </section>
 

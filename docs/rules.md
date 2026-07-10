@@ -60,7 +60,7 @@ These are the identifiers a predicate can mention. Everything else is unknown to
 | Key | Type | Notes |
 |---|---|---|
 | `triggerName` | String | Short name of the trigger process (`op`, `git`, `ssh`, `op-ssh-sign`, …). This is `kinfo_proc`'s name — argv[0] isn't used. |
-| `triggerArgv` | [String] | Full argv of the trigger. Use `ANY` / `ALL` to match elements. |
+| `triggerArgv` | [String] | Full argv of the trigger, with secret-looking tokens replaced by `‹redacted›` (see below). Use `ANY` / `ALL` to match elements. |
 | `subcommand` | String? | First non-flag argv token after argv[0] — `"push"` for `git -C /tmp push origin`. Honours `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace` pair-flags. |
 | `chainNames` | [String] | Names of every process in the chain, trigger first. |
 | `cwd` | String? | Tidied working directory found by walking up the chain. `nil` or `"/"` when nothing better was available. |
@@ -75,6 +75,8 @@ These are the identifiers a predicate can mention. Everything else is unknown to
 | `pluginUpdateAvailable` | Bool | True iff op-who detected a Claude plugin update check on this request. |
 
 Quoted string literals starting with `~/` (or just `~`) are expanded to the current user's home before parsing. So `triggerCwd BEGINSWITH "~/git/foo"` is equivalent to `triggerCwd BEGINSWITH "/Users/you/git/foo"` and travels between machines.
+
+**Secrets are redacted before matching.** `triggerArgv` (and therefore the `{argv}` / `{argv[N]}` template placeholders) is scrubbed at capture: `op` password-field assignments, known token shapes (AWS/GitHub/Slack/JWT/PEM/`Bearer`/URL-password), and high-entropy blobs become `‹redacted›`. Ordinary tokens — subcommands, flags, `op://` URIs, file paths — are left intact, so predicates like `ANY triggerArgv CONTAINS "op://prod"` still work. Just don't try to match on a literal secret value: it won't be there.
 
 ## Template placeholders
 

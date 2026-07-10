@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added: Secrets in captured argv, inline-command snippets, and Claude Code context are redacted (`op` password fields, known token shapes, high-entropy blobs) before display, logging, rule matching, or storage.
 - Added: Signed `.pkg` installer (Developer ID Installer, notarized) for MDM/Fleet software distribution, alongside the Homebrew `.zip`. The pkg installs a login LaunchAgent and boots it via a postinstall so a silent push takes effect without a logout.
 
 ## [0.9.0] - 2026-06-16

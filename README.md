@@ -66,6 +66,7 @@ op-who validates the identity of processes it interacts with:
 - **`op` CLI** — executable path resolved and code signature checked; verified binaries shown in green, unverified in orange
 - **TTY paths** — validated against `/dev/ttys[0-9]+` before any read/write operations
 - **TTY messages** — only written when you explicitly click "Send Message" in the overlay
+- **Captured text** — argv, interpreter inline-command snippets, and Claude Code context are scrubbed of secrets at capture (`op` password fields, known token shapes for AWS/GitHub/Slack/JWT/PEM/Bearer/URL passwords, and high-entropy blobs become `‹redacted›`) before anything is shown, logged, matched against rules, or persisted
 
 Release-artifact trust is documented in [SIGNING.md](SIGNING.md).
 

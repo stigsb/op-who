@@ -30,6 +30,7 @@ flowchart TB
         overlay["OverlayPanel<br/>floating NSPanel UI"]
         term["TerminalHelper<br/>tab title / activate / write"]
         upd["UpdateChecker + AppInfo<br/>version check via GitHub API"]
+        redact["SecretRedaction<br/>3-layer secret scrub"]
     end
 
     subgraph shim[OpWhoObjCShim]
@@ -48,6 +49,9 @@ flowchart TB
     watcher --> summary
     watcher --> claude
     watcher --> cmux
+    watcher --> redact
+    ptree --> redact
+    claude --> redact
     watcher --> overlay
     overlay --> term
     overlay --> ptree
@@ -85,6 +89,7 @@ Module responsibilities at a glance:
 - **`OverlayPanel`** — non-activating floating `NSPanel` that renders the single chosen entry with chain, CWD, terminal/cmux info, Claude session + last prompt, and "Show Tab" / "Send Message" actions.
 - **`TerminalHelper`** — terminal-app integration: tab title lookup, tab activation, TTY message writes, plus per-terminal keyboard-shortcut hints (e.g. "⌘1") for jumping to the source tab.
 - **`UpdateChecker` / `AppInfo`** — `AppInfo` reads the running bundle's marketing version and holds the repo URL; `UpdateChecker` powers the "Check for Updates…" menu item by fetching GitHub's `/releases/latest`, comparing tags numerically, and reporting up-to-date / update-available / failed. Pure parse/compare/evaluate helpers are separated from the network call so they're unit-testable.
+- **`SecretRedaction`** — pure functions that scrub secrets out of any captured text before it reaches the overlay, the unified log, the rule engine, or the ring buffer. `redactArgv` (count- and order-preserving) is applied to trigger argv at capture; `redactString` covers interpreter inline-command snippets and Claude Code context. Three layers run per token: `op`-field assignments, known token shapes, then a high-entropy catch-all (see §4.14).
 - **`OPPredicateParser` (ObjC)** — wraps `+[NSPredicate predicateWithFormat:]` in `@try`/`@catch`. Swift can't catch Objective-C exceptions directly, so without this shim a typo in a user-authored predicate would crash the app at parse time.
 
 ## 3. Lifecycle: From Approval to Overlay
@@ -228,7 +233,7 @@ The longest-lived object in the app. Responsibilities:
 - **Attach/detach lifecycle** — observes `NSWorkspace.didLaunchApplicationNotification` and `…didTerminateApplicationNotification` for the two known 1Password bundle IDs (`com.1password.1password`, `com.agilebits.onepassword7`). On attach, verifies the running 1Password's code signature against Apple Team ID `2BUA8C4S2C` *before* registering the AX observer — this prevents a maliciously-renamed process from receiving AX notifications.
 - **AX observer registration** — creates an `AXObserver` for the 1Password PID, subscribes to `kAXWindowCreatedNotification` and `kAXFocusedWindowChangedNotification`, and adds the observer's run loop source to `CFRunLoopGetMain()` so callbacks fire on the main thread.
 - **Approval-dialog classification** — `isApprovalDialog(_:)` (see §3.2).
-- **Candidate assembly** — for each trigger process: walk the chain, fold the `op` biometric-helper child into its parent via `foldOpHelper`, look up argv via `processArgv`, drop non-network `git` triggers, look up terminal tab info, extract Claude session/context, look up the trigger CWD and `bestCWD`, detect a Claude plugin update if it's a `git` trigger under `~/.claude/plugins/`, read cmux workspace/surface info when running under cmux, run the matcher engine, build a `ProcessEntry` carrying the matched rule's id/name/builtInID and the rendered summary.
+- **Candidate assembly** — for each trigger process: walk the chain, fold the `op` biometric-helper child into its parent via `foldOpHelper`, look up argv via `processArgv` and scrub it with `redactArgv` (see §4.14), drop non-network `git` triggers, look up terminal tab info, extract Claude session/context, look up the trigger CWD and `bestCWD`, detect a Claude plugin update if it's a `git` trigger under `~/.claude/plugins/`, read cmux workspace/surface info when running under cmux, run the matcher engine, build a `ProcessEntry` carrying the matched rule's id/name/builtInID and the rendered summary.
 - **Candidate ranking** — `selectBestCandidate` (see §4.4).
 - **Ring buffer record** — every shown candidate (after ranking) is appended to the `RecentRequestsStore`.
 - **Re-show suppression** — when `handleWindowEvent` fires for a PID already being polled, the watcher refreshes the cached AX element and skips the overlay re-render.
@@ -309,7 +314,7 @@ Given a captured request, builds the user-visible `(title, subtitle, kind, isWar
 
 ### 4.9 `ClaudeContext` and `ClaudePluginUpdate`
 
-`ClaudeContext` tails the most recent JSONL transcript in `~/.claude/projects/<encoded-cwd>/` and extracts the most recent user prompt and the most recent shell-relevant command (either a `<bash-input>` block the user typed or a Bash tool_use Claude initiated). These appear in the overlay's expanded details so you can see *why* Claude is asking for a credential without context-switching.
+`ClaudeContext` tails the most recent JSONL transcript in `~/.claude/projects/<encoded-cwd>/` and extracts the most recent user prompt and the most recent shell-relevant command (either a `<bash-input>` block the user typed or a Bash tool_use Claude initiated). These appear in the overlay's expanded details so you can see *why* Claude is asking for a credential without context-switching. Both are run through `redactString` (§4.14) before truncation, so a credential the user typed into Claude never surfaces in the overlay.
 
 `ClaudePluginUpdate` detects Claude's background plugin/marketplace refresh `git` jobs. When a `git` trigger's own CWD lives under `~/.claude/plugins/`, the helper resolves the repo root and looks it up against `~/.claude/plugins/known_marketplaces.json`. On a hit, the request is rendered as `Claude plugin update check for <repo> (<source>)`; otherwise as the raw `Claude plugin update check from <remote-url>`. Both rules have `replacesActor = true` because saying "Your zsh shell" in front of housekeeping noise reads wrong.
 
@@ -352,6 +357,27 @@ Tab title lookup for unknown terminals: enumerate AX windows for the terminal PI
 `AppInfo` reads the running bundle's `CFBundleShortVersionString` live (falling back to `"unknown"` outside a bundle, e.g. in tests) and holds the static repo URL. It backs the "About op-who" alert.
 
 `UpdateChecker` backs the "Check for Updates…" menu item. `checkForUpdates(currentVersion:session:completion:)` fetches GitHub's `/repos/stigsb/op-who/releases/latest` (with the `User-Agent` header GitHub requires) and always calls back on the main thread. The parse/compare/decide logic is factored into pure, network-free helpers so it's unit-testable: `parseVersion` accepts an optional leading `v` and rejects non-numeric or negative components; `compare` zero-pads the shorter operand and compares numerically (so `0.10.0 > 0.9.0`); `evaluate(responseData:currentVersion:)` decodes the release JSON and returns `.upToDate`, `.updateAvailable(latest:releaseURL:)`, or `.failed(message:)`. An unparseable *local* version surfaces the available release rather than falsely claiming up-to-date.
+
+### 4.14 `SecretRedaction` — scrubbing captured text
+
+op-who reads other processes' argv and interpreter inline-command snippets, and tails Claude Code's transcript. Any of these can contain a literal credential — `op item create … password=hunter2`, `curl -H "Authorization: Bearer <token>"`, `psql postgres://user:pw@host`. `SecretRedaction` removes those before the text is shown, logged, matched, or persisted. Everything here is a pure string function; the placeholder is `‹redacted›` (single-angle-quoted so it's visually distinct and greppable).
+
+`redactToken` runs three layers in order, most-specific first:
+
+1. **`op`-field assignments** (`redactOpFields`) — matches `name[type]=value` tokens and redacts the value when the field *type* is `password`/`concealed`, or the field *name* contains `credential`/`password`/`passwd`/`secret`/`token`/`apikey`/`api_key` or matches `private.?key`. The `name[type]=` prefix is preserved so `op item create` invocations stay legible.
+2. **Known token shapes** (`redactKnownPatterns`) — regexes for AWS access-key IDs (`AKIA…`), GitHub tokens (`gh[pousr]_…`), Slack tokens (`xox[baprs]-…`), Google API keys (`AIza…`), JWTs (`eyJ….eyJ….…`), PEM `PRIVATE KEY` headers, `Bearer <token>` (keeps the `Bearer ` lead-in), and URL user-info passwords (`://user:pw@` → keeps `://user:`). Prefix-keeping rules leave a hint about *what kind* of secret was hidden.
+3. **High-entropy catch-all** (`redactHighEntropy`) — for anything the shape rules miss, each whitespace-delimited word (or, for `key=value` / `--flag=value`, only the part after the last `=`) is redacted when it is ≥20 chars, drawn from a base64-ish charset that deliberately **excludes `/`**, doesn't start with `-`, and has Shannon entropy ≥3.5 bits/char. Excluding `/` is what keeps filesystem paths and `op://` URIs intact; the length/entropy floor is what keeps ordinary words and long `--flags` intact.
+
+Two public entry points wrap `redactToken`:
+
+- **`redactArgv([String]) -> [String]`** maps each argv element independently, so the result has the **same count and order** as the input — every position-based argv parser (`subcommand` extraction, the git-network filter, the `{argv[N]}` placeholder) keeps working on the redacted array unchanged.
+- **`redactString(String) -> String`** redacts a single free-form string.
+
+Call sites (redaction happens at *capture*, so no downstream consumer ever sees the raw secret):
+
+- `OnePasswordWatcher` wraps `ProcessTree.processArgv(triggerPID)` in `redactArgv` — the redacted argv is what feeds the overlay, the unified log, and predicate rule matching.
+- `ProcessTree.detectScript` runs `redactString` over interpreter `-c` / `-e` inline-command snippets before truncation.
+- `ClaudeContext` runs `redactString` over the last user prompt and last relevant command **before** truncating them (so a secret split by truncation can't leak a partial).
 
 ## 5. Process-Chain Walking
 
@@ -418,6 +444,7 @@ These are the non-obvious decisions a new contributor is most likely to question
 - **Walk the chain to find the first non-`/` CWD.** Rationale: the trigger process (`op`, `ssh`) is often spawned with CWD `/` by some shells or wrappers. The user actually cares about the *shell's* CWD — which is one or two hops up. Walking until a non-`/` CWD is found gives the right answer in the common case while still showing `/` honestly when that's all there is.
 - **Use the trigger's own CWD (not bestCWD) for plugin-update detection.** Rationale: Claude's plugin refresh runs `git fetch` with CWD under `~/.claude/plugins/<repo>/`, but the surrounding chain may have a wider CWD. Only the trigger's literal CWD reliably places the request under the plugins tree.
 - **Detect Claude Code in two passes: by process name, then by `node` arguments.** Rationale: the Homebrew install ships a Bun-based standalone binary (process name `claude`) and the npm install runs as `node`. The first pass catches the Homebrew case directly; the second pass scans `KERN_PROCARGS2` of any `node` processes for `claude` or `@anthropic`. The session name comes from the process CWD basename — the Bun build no longer holds session JSONL files open, so an `lsof`-based scan for `.claude/projects/` paths would miss them, while the CWD is reliably set to the project directory by both flavors.
+- **Redact secrets at capture, in layered pure functions.** Rationale: op-who surfaces argv, inline-command snippets, and Claude transcript text — all of which can contain a literal credential — in the overlay, the unified log, the rule engine, and the persisted ring buffer. Scrubbing once, at the point of capture (`redactArgv`/`redactString`), means no downstream consumer can leak a raw secret and there's no per-sink redaction to keep in sync. Three ordered layers (op-field assignments → known token shapes → high-entropy catch-all) trade a few false positives for defense in depth; `redactArgv` preserves argv count and order so parsers and predicates are unaffected. See §4.14.
 - **Install a main menu inside an `LSUIElement` app, for Edit shortcuts in Settings.** Rationale: text fields route Cmd-C/V/X/Z through the menu's responder chain, not the window. Without a main menu the Settings window's fields silently swallow those keystrokes. The menu only appears while op-who is active, so it doesn't intrude elsewhere.
 - **Re-sign the bundle ad-hoc with `CFBundleIdentifier` as the signing identifier.** Rationale: TCC keys Accessibility (and Automation) grants on the code signature's identifier. Without the bundle script re-signing with `Info.plist` in place, the identifier defaults to `swift build`'s per-build hash and the user has to re-grant Accessibility on every rebuild. See [CLAUDE.md](../CLAUDE.md) for the full rule.
 - **`LSUIElement = true` in `Info.plist`.** Rationale: `op-who` is a menu bar utility — there's no main window, no dock presence, no app switcher entry. The `LSUIElement` flag is what makes that work.
@@ -445,7 +472,8 @@ Tests use Swift Testing (`import Testing`) and run via `swift test`. Coverage fo
 - **`CandidateSelectionTests`** — `foldOpHelper` and `selectBestCandidate` ranking under all kind/start-time combinations.
 - **`ApprovalWindowDetectionTests`, `DialogDismissalTests`** — the two pure decision helpers carved out of `OnePasswordWatcher`: `isApprovalWindow(role:subrole:title:)` (bare-title/`AXDialog` classification, including that former denylist surfaces stay excluded under positive matching) and `shouldDismiss(...)` (the OR-of-signals policy with the window-gone tick threshold and counter reset).
 - **`UpdateCheckerTests`** — `parseVersion` / `compare` (numeric, not lexical, ordering; leading-`v` stripping; malformed and negative rejection) and `evaluate` release-decision outcomes (newer/equal/older tags, malformed tag, garbage JSON, unparseable local version).
-- **`ClaudeContextTests`** — JSONL tail parsing, plugin-update resolution against `known_marketplaces.json`.
+- **`ClaudeContextTests`** — JSONL tail parsing, plugin-update resolution against `known_marketplaces.json`, and that captured prompts/commands are redacted.
+- **`SecretRedactionTests`** — each layer in isolation (entropy scoring, known token shapes, `op`-field type/name detection) and the composed entry points: `redactArgv` count/order preservation, paths and `op://` URIs left intact, `Bearer`/URL-userinfo prefix retention, and `detectScript` snippet redaction end-to-end.
 - **`CmuxHelperTests`** — surface-info lookup and the generic-title filter.
 - **`TerminalHelperTests`** — `isValidTTYPath` regex acceptance/rejection across realistic and adversarial inputs.
 - **`ProcessTreeTests`** — `ProcessNode` display formatting, `formatChain` arrow-join, `tidyPath` HOME-substitution, `allProcesses` smoke test, `findOpProcesses` filtering.
