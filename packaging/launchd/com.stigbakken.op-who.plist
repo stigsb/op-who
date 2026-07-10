@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for op-who, installed to /Library/LaunchAgents by the .pkg.
+
+  A menu bar (LSUIElement) app dropped into /Applications by a silent MDM
+  install does NOT start on its own, so managed users would see nothing until
+  their next login. This agent starts it:
+
+    - RunAtLoad: launches op-who when the agent is loaded (at GUI login, and
+      immediately via the pkg's postinstall for the already-logged-in user).
+    - LimitLoadToSessionType Aqua: only in an interactive GUI session, never
+      in ssh/background contexts (a menu bar app has nothing to do there).
+
+  No KeepAlive: if the user quits op-who from its own menu, it stays quit
+  until the next login rather than being relaunched from under them.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stigbakken.op-who</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/op-who.app/Contents/MacOS/op-who</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

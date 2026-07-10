@@ -2,7 +2,14 @@ import Foundation
 import Testing
 @testable import OpWhoLib
 
-@Suite("CmuxHelper session-file parser")
+// `.serialized` because every test here installs/clears the shared global
+// `CmuxHelper.testMap`. Swift Testing runs tests in parallel by default, so
+// without this one test's `clearTestMap()` (via defer) can fire between
+// another's `installTestMap(...)` and its `surfaceInfo(...)` read — the lookup
+// then falls through to the real cmux session file (absent in CI → nil, or the
+// developer's live session locally), producing flaky, environment-dependent
+// failures. Serializing the suite removes the interleaving.
+@Suite("CmuxHelper session-file parser", .serialized)
 struct CmuxHelperTests {
 
     /// Trimmed-down but realistic chunk of cmux's

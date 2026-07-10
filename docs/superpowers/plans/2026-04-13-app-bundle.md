@@ -32,7 +32,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>ai.sunstoneinstitute.op-who</string>
+    <string>com.stigbakken.op-who</string>
     <key>CFBundleName</key>
     <string>op-who</string>
     <key>CFBundleExecutable</key>

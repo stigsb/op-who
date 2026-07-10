@@ -1,0 +1,40 @@
+#!/bin/bash
+# postinstall — run as root by the installer after the payload is laid down.
+#
+# The payload has already placed:
+#   /Applications/op-who.app
+#   /Library/LaunchAgents/com.stigbakken.op-who.plist
+#
+# The LaunchAgent's RunAtLoad starts op-who at the next GUI login on its own.
+# To avoid making a silent MDM install wait for that, we also boot the agent
+# into the *currently* logged-in user's GUI session right now. Best-effort:
+# if nobody is logged in at the GUI (e.g. installed at the login window or on
+# a headless push), we do nothing and let RunAtLoad handle the next login.
+
+set -u
+
+PLIST="/Library/LaunchAgents/com.stigbakken.op-who.plist"
+
+# The active GUI (console) user. scutil is more reliable than `stat /dev/console`
+# for skipping the login-window / setup-assistant pseudo-users.
+console_user=$(/usr/sbin/scutil <<< 'show State:/Users/ConsoleUser' \
+    | awk '/Name :/ { print $3 }')
+
+# No real user session — nothing to kick; next login will RunAtLoad it.
+if [ -z "$console_user" ] || [ "$console_user" = "loginwindow" ] \
+        || [ "$console_user" = "_mbsetupuser" ] || [ "$console_user" = "root" ]; then
+    exit 0
+fi
+
+uid=$(/usr/bin/id -u "$console_user" 2>/dev/null)
+[ -n "$uid" ] || exit 0
+
+# Reload cleanly: bootout any stale instance, then bootstrap the current plist.
+/bin/launchctl bootout "gui/$uid" "$PLIST" 2>/dev/null || true
+/bin/launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null || true
+
+# bootstrap already RunAtLoads it; kickstart is a harmless belt-and-suspenders
+# in case the agent was already registered.
+/bin/launchctl kickstart "gui/$uid/com.stigbakken.op-who" 2>/dev/null || true
+
+exit 0

@@ -70,8 +70,19 @@ xcrun stapler staple "$APP_DIR"
 rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
 
+# --- Build Fleet installer pkg -----------------------------------------------
+# The .zip above is the drag-install / Homebrew-cask artifact. The .pkg is for
+# MDM/Fleet software distribution (installs the app + a login LaunchAgent
+# non-interactively). It reuses the now-notarized+stapled app and notarizes the
+# pkg itself under the same "op-who" keychain profile.
+
+echo "Building Fleet installer pkg..."
+PKG_PATH=$(scripts/build-pkg.sh | tail -1 | sed 's/^Installer package: //')
+
 # --- Done ---------------------------------------------------------------------
 
 echo ""
-echo "Release artifact: $ZIP_PATH"
+echo "Release artifacts:"
+echo "  zip (drag-install / Homebrew cask): $ZIP_PATH"
+echo "  pkg (MDM / Fleet):                  ${PKG_PATH}"
 echo "Install with: cp -R .build/${APP_NAME} /Applications/"

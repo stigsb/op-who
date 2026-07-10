@@ -22,7 +22,7 @@ Key entries:
 
 | Key | Value | Purpose |
 |-----|-------|---------|
-| CFBundleIdentifier | ai.sunstoneinstitute.op-who | Bundle ID |
+| CFBundleIdentifier | com.stigbakken.op-who | Bundle ID |
 | CFBundleName | op-who | Display name |
 | CFBundleExecutable | op-who | Binary name |
 | CFBundleVersion | 1.0.0 | Build version |
