@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>op-who — who triggered that 1Password prompt?</title>
+  <meta name="description" content="A macOS menu bar utility that shows which process triggered a 1Password approval dialog — from the CLI (op) or the SSH agent.">
+  <link rel="icon" type="image/svg+xml" href="op-who-icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="index.html">
+        <img src="op-who-icon.svg" alt="">
+        op-who
+      </a>
+      <div class="spacer"></div>
+      <div class="links">
+        <a href="#install">Install</a>
+        <a href="rules.html">Rule Reference</a>
+        <a href="https://github.com/stigsb/op-who">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="wrap">
+      <img class="logo" src="op-who-icon.svg" alt="op-who icon">
+      <h1>op-who</h1>
+      <p class="tagline">A macOS menu bar utility that shows <em>which process</em> triggered a 1Password approval dialog — whether from the CLI (<code>op</code>) or the SSH agent.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#install">Install</a>
+        <a class="btn btn-ghost" href="https://github.com/stigsb/op-who/releases/latest">Latest release</a>
+      </div>
+    </div>
+  </header>
+
+  <section id="why" class="content">
+    <div class="wrap">
+      <h2>Why does it exist?</h2>
+      <p class="lead">1Password's approval dialog tells you <em>which app</em> is requesting access — but not <em>which terminal session</em> or <em>which command</em> started it. If you have several terminals open running builds, git operations, or Claude Code sessions, you're left guessing.</p>
+      <p>op-who fills in the missing context so you can approve (or deny) with confidence. When 1Password shows its approval dialog, op-who pops up a floating overlay right next to it, telling you exactly what asked.</p>
+    </div>
+  </section>
+
+  <section id="shows" class="soft content">
+    <div class="wrap">
+      <h2>What it shows</h2>
+      <p class="lead">A floating overlay that appears next to the 1Password dialog and reports:</p>
+      <div class="cards">
+        <div class="card">
+          <h4>The full process chain</h4>
+          <p>From the trigger up to the terminal, e.g. <code>op → bash → node → zsh</code>, with verified <code>op</code> binaries shown in green.</p>
+        </div>
+        <div class="card">
+          <h4>Working directory</h4>
+          <p>The CWD of the requesting process, walked up the chain to the first meaningful directory.</p>
+        </div>
+        <div class="card">
+          <h4>Claude Code context</h4>
+          <p>Session/project name and the last prompt or command, when Claude Code is in the chain.</p>
+        </div>
+        <div class="card">
+          <h4>Terminal tab</h4>
+          <p>The terminal tab title matched by TTY, plus a button to jump straight to that tab.</p>
+        </div>
+        <div class="card">
+          <h4>PID &amp; TTY</h4>
+          <p>The process ID, the TTY device, and how long the approval has been pending.</p>
+        </div>
+        <div class="card">
+          <h4>A readable summary</h4>
+          <p>One plain-English line — <em>"Claude Code session 'op-who' is signing a commit"</em> — from a configurable <a href="rules.html">rule engine</a>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" class="content">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li>Watches for the 1Password process and verifies its code signature (Apple Team ID <code>2BUA8C4S2C</code>).</li>
+        <li>Attaches an Accessibility observer to detect new windows, and classifies approval dialogs by their bare <strong>1Password</strong> title.</li>
+        <li>Finds trigger processes: <code>op</code> CLI processes (signature-verified) or SSH clients (<code>ssh</code>, <code>git</code>, <code>scp</code>, <code>sftp</code>, <code>rsync</code>, <code>ssh-keygen</code>, <code>op-ssh-sign</code>).</li>
+        <li>Walks each trigger's parent chain, stopping at macOS app boundaries (1Password already shows the app name).</li>
+        <li>Looks up terminal tab titles via AppleScript (Terminal.app, iTerm2) or the Accessibility API (Ghostty, Warp, and others).</li>
+        <li>Runs the captured context through a user-editable <a href="rules.html">rule engine</a> to produce the one-line description.</li>
+        <li>Shows the overlay near the dialog, then dismisses it automatically when the dialog closes or the trigger processes exit.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="install" class="soft content">
+    <div class="wrap">
+      <h2>Install</h2>
+      <p class="lead">op-who is a notarized, Developer ID–signed macOS app. Install it with <a href="https://brew.sh">Homebrew</a>:</p>
+
+      <pre><code>brew install --cask stigsb/tap/op-who</code></pre>
+
+      <p><code>brew upgrade --cask op-who</code> keeps it current.</p>
+
+      <div class="note">
+        <strong>Prefer a manual install?</strong> Download <code>op-who.zip</code> from the <a href="https://github.com/stigsb/op-who/releases/latest">latest release</a>, unzip it, and drag <code>op-who.app</code> to <code>/Applications</code>. For MDM/Fleet deployment, each release also ships a signed <code>op-who-&lt;version&gt;.pkg</code> installer.
+      </div>
+
+      <p>After install, look for the op-who icon in your menu bar and grant Accessibility once when prompted (System Settings → Privacy &amp; Security → Accessibility). When 1Password shows an approval dialog, the overlay appears next to it.</p>
+
+      <h3>Requirements</h3>
+      <ul>
+        <li>macOS 13 or later</li>
+        <li>1Password 8 with CLI or SSH agent integration enabled</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="terminals" class="content">
+    <div class="wrap">
+      <h2>Supported terminals</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Terminal</th><th>Tab title lookup</th><th>Tab activation</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Terminal.app</td><td>AppleScript</td><td>AppleScript</td></tr>
+            <tr><td>iTerm2</td><td>AppleScript</td><td>AppleScript</td></tr>
+            <tr><td>Ghostty, Warp, others</td><td>Accessibility API</td><td>App activation</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>cmux is recognized too: op-who surfaces the workspace / tab name and the <kbd>⌘N</kbd> / <kbd>⌃N</kbd> shortcut to jump to it.</p>
+    </div>
+  </section>
+
+  <section id="security" class="soft content">
+    <div class="wrap">
+      <h2>Security</h2>
+      <p class="lead">op-who validates the identity of the processes it interacts with.</p>
+      <ul>
+        <li><strong>1Password app</strong> — code signature verified before attaching the Accessibility observer.</li>
+        <li><strong><code>op</code> CLI</strong> — executable path resolved and code signature checked; verified binaries shown in green, unverified in orange.</li>
+        <li><strong>TTY paths</strong> — validated against <code>/dev/ttys[0-9]+</code> before any read/write operation.</li>
+        <li><strong>TTY messages</strong> — only written when you explicitly click "Send Message" in the overlay.</li>
+      </ul>
+      <p>It runs as a menu bar app (<code>LSUIElement</code>) and is non-sandboxed because it must enumerate other processes and read their working directories. It never reads secret values — only process metadata. Release-artifact trust is documented in <a href="https://github.com/stigsb/op-who/blob/main/SIGNING.md">SIGNING.md</a>.</p>
+    </div>
+  </section>
+
+  <section id="rules-teaser" class="content">
+    <div class="wrap">
+      <h2>Configurable rules</h2>
+      <p class="lead">The overlay's one-line description comes from a rule engine. A default set of built-ins covers common cases (<code>git push</code>, <code>op read</code>, SSH key signing, Claude plugin update checks); you can disable any built-in or add your own from Settings using NSPredicate expressions.</p>
+      <p><a class="btn btn-primary" href="rules.html">Read the Rule Reference →</a></p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <span>op-who — MIT licensed</span>
+      <span class="spacer"></span>
+      <a href="https://github.com/stigsb/op-who">GitHub</a>
+      <a href="rules.html">Rule Reference</a>
+      <a href="https://github.com/stigsb/op-who/releases">Releases</a>
+    </div>
+  </footer>
+
+</body>
+</html>

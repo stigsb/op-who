@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>op-who — Rule Reference</title>
+  <meta name="description" content="Reference for op-who's Settings and rule language: actors, templates, predicate keys, template placeholders, and an NSPredicate cheatsheet.">
+  <link rel="icon" type="image/svg+xml" href="op-who-icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="index.html">
+        <img src="op-who-icon.svg" alt="">
+        op-who
+      </a>
+      <div class="spacer"></div>
+      <div class="links">
+        <a href="index.html">Home</a>
+        <a href="index.html#install">Install</a>
+        <a href="https://github.com/stigsb/op-who">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero" style="padding:56px 0 40px">
+    <div class="wrap">
+      <h1 style="margin-top:0">Rule Reference</h1>
+      <p class="tagline">How op-who turns a captured 1Password approval into the one-line description shown in the overlay — and how to write your own rules from Settings.</p>
+    </div>
+  </header>
+
+  <section class="content">
+    <div class="wrap">
+
+      <p class="lead">A <strong>rule</strong> is what op-who uses to turn a captured 1Password approval into the description it shows. Every approval flows through an ordered list of rules; the first match wins; that rule's template is rendered against the captured context to produce the title.</p>
+      <p>The engine ships with a default set of built-ins covering common cases (<code>git push</code>, <code>op read</code>, SSH key signing, Claude plugin update checks). You can disable any built-in or add your own user rules — user rules always run first, so a custom rule can shadow a built-in without removing it.</p>
+
+      <div class="toc">
+        <strong>On this page</strong>
+        <ul>
+          <li><a href="#anatomy">Anatomy of a rule</a></li>
+          <li><a href="#actor">The actor</a></li>
+          <li><a href="#matching">How matching works</a></li>
+          <li><a href="#keys">Predicate keys</a></li>
+          <li><a href="#placeholders">Template placeholders</a></li>
+          <li><a href="#nspredicate">NSPredicate cheatsheet</a></li>
+          <li><a href="#examples">Examples</a></li>
+          <li><a href="#testing">Testing a rule</a></li>
+          <li><a href="#compose">Rules &amp; built-ins</a></li>
+        </ul>
+      </div>
+
+      <h2 id="anatomy">Anatomy of a rule</h2>
+      <p>A rule has eight user-visible fields. Five are required; three are flags or notes.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Name</strong></td><td>Human-friendly label, shown in the Rules pane. Doesn't affect matching.</td></tr>
+            <tr><td><strong>Predicate</strong></td><td>Boolean expression in NSPredicate format. If it evaluates true against the request, this rule is a candidate.</td></tr>
+            <tr><td><strong>Template</strong></td><td>String with <code>{placeholders}</code>. Rendered to produce the overlay text.</td></tr>
+            <tr><td><strong>Kind</strong></td><td>One of <code>onePasswordCLI</code>, <code>unverifiedOp</code>, <code>ssh</code>, <code>unknown</code>. Determines icon and grouping.</td></tr>
+            <tr><td><strong>Replaces actor</strong></td><td>If true, the template is the <em>whole</em> title. If false, op-who prefixes an auto-computed actor.</td></tr>
+            <tr><td><strong>Is warning</strong></td><td>If true, the entry is rendered with the warning style (used for the unverified-<code>op</code> rule, for example).</td></tr>
+            <tr><td><strong>Comment</strong></td><td>Free-form note for your future self. Never used by the engine.</td></tr>
+            <tr><td><strong>Enabled</strong></td><td>On/off switch. Disabled rules are skipped during evaluation.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>User rules live in <code>~/Library/Application Support/com.stigbakken.op-who/rules.json</code> and are reloaded whenever you save in the Settings window — no restart needed.</p>
+
+      <h2 id="actor">The actor</h2>
+      <p>The <strong>actor</strong> is the auto-computed prefix that identifies <em>who</em> triggered the request. It's derived from the process chain, the terminal app, and any detected Claude Code session. You don't write the actor — op-who picks it for you. Examples:</p>
+      <ul>
+        <li><code>Claude Code session 'op-who'</code></li>
+        <li><code>Claude Code in cmux workspace 'work'</code></li>
+        <li><code>iTerm tab 'build'</code></li>
+        <li><code>Your zsh shell</code></li>
+        <li><code>Process 12345</code></li>
+      </ul>
+      <p>The <strong>template</strong> is the verb phrase that follows the actor. So a rule with template <code>is signing a commit in {cwd}</code> and an iTerm tab named <code>build</code> produces:</p>
+      <div class="note blue">iTerm tab 'build' <strong>is signing a commit in /Users/stig/git/op-who</strong></div>
+      <p>If your template names its own subject (e.g. the Claude plugin update rule, which says <em>"Claude plugin update check for org/repo (marketplace)"</em>), the actor prefix would be noise. Set <strong>Replaces actor</strong> on the rule and op-who will use the template as the whole title.</p>
+
+      <h2 id="matching">How matching works</h2>
+      <p>For each approval the engine builds a <code>MatchContext</code> from the process chain, trigger argv, working directories, Claude session, and 1Password plugin metadata. It then walks the rule list in order:</p>
+      <ol class="content">
+        <li>Skip rules where <code>enabled == false</code>.</li>
+        <li>Parse the predicate. If NSPredicate rejects it, log and skip.</li>
+        <li>Evaluate the predicate against the context. If false, continue.</li>
+        <li>Render the template. <strong>If any <code>{placeholder}</code> resolves to an empty string, treat the rule as a non-match and continue.</strong></li>
+        <li>Otherwise: this is the match. Return it.</li>
+      </ol>
+      <p>The placeholder-empty-means-fall-through behaviour is how the built-ins do "structured render, then raw fallback" — two rules with the same predicate, the first using <code>{repo}</code> and the second using <code>{plugin_remote}</code>. If the structured lookup misses, the engine falls through to the simpler rule.</p>
+      <p>The final built-in is <code>TRUEPREDICATE</code> with template <code>triggered 1Password (via '{process}')</code> — it always matches, so you'll always get <em>something</em>.</p>
+
+      <h2 id="keys">Predicate context: keys you can reference</h2>
+      <p>These are the identifiers a predicate can mention. Everything else is unknown to the engine — the editor's syntax checker flags references to unknown keys.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Key</th><th>Type</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>triggerName</code></td><td>String</td><td>Short name of the trigger process (<code>op</code>, <code>git</code>, <code>ssh</code>, <code>op-ssh-sign</code>, …). This is <code>kinfo_proc</code>'s name — argv[0] isn't used.</td></tr>
+            <tr><td><code>triggerArgv</code></td><td>[String]</td><td>Full argv of the trigger. Use <code>ANY</code> / <code>ALL</code> to match elements.</td></tr>
+            <tr><td><code>subcommand</code></td><td>String?</td><td>First non-flag argv token after argv[0] — <code>"push"</code> for <code>git -C /tmp push origin</code>. Honours <code>-C</code>, <code>-c</code>, <code>--git-dir</code>, <code>--work-tree</code>, <code>--namespace</code> pair-flags.</td></tr>
+            <tr><td><code>chainNames</code></td><td>[String]</td><td>Names of every process in the chain, trigger first.</td></tr>
+            <tr><td><code>cwd</code></td><td>String?</td><td>Tidied working directory found by walking up the chain. <code>nil</code> or <code>"/"</code> when nothing better was available.</td></tr>
+            <tr><td><code>triggerCwd</code></td><td>String?</td><td>The trigger's <em>own</em> CWD, un-tidied. Good for prefix matches like <code>triggerCwd BEGINSWITH "~/.claude/plugins"</code>.</td></tr>
+            <tr><td><code>binaryVerified</code></td><td>Bool</td><td>True iff the trigger is <code>op</code> and its on-disk binary is signed by 1Password's Apple Team ID. False for everything else.</td></tr>
+            <tr><td><code>claudeSession</code></td><td>String?</td><td>Claude Code session name (project basename) when Claude was in the chain.</td></tr>
+            <tr><td><code>terminalBundleID</code></td><td>String?</td><td>Bundle ID of the terminal app (<code>com.apple.Terminal</code>, <code>com.googlecode.iterm2</code>, …).</td></tr>
+            <tr><td><code>pluginRemoteURL</code></td><td>String?</td><td>Git remote URL when a Claude plugin update was detected.</td></tr>
+            <tr><td><code>pluginRepo</code></td><td>String?</td><td><code>org/repo</code> form of the plugin remote when resolvable.</td></tr>
+            <tr><td><code>pluginSourceType</code></td><td>String?</td><td>Where the plugin came from (<code>marketplace</code>, <code>github</code>, …).</td></tr>
+            <tr><td><code>pluginMarketplaceName</code></td><td>String?</td><td>Friendly marketplace name when resolved via the known-marketplaces table.</td></tr>
+            <tr><td><code>pluginUpdateAvailable</code></td><td>Bool</td><td>True iff op-who detected a Claude plugin update check on this request.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Quoted string literals starting with <code>~/</code> (or just <code>~</code>) are expanded to the current user's home before parsing. So <code>triggerCwd BEGINSWITH "~/git/foo"</code> is equivalent to <code>triggerCwd BEGINSWITH "/Users/you/git/foo"</code> and travels between machines.</p>
+
+      <h2 id="placeholders">Template placeholders</h2>
+      <p>These are the placeholders the template renderer understands. Anything else inside <code>{…}</code> is replaced with an empty string, which (per the matching rules above) causes the rule to fall through to the next one.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Placeholder</th><th>Resolves to</th></tr></thead>
+          <tbody>
+            <tr><td><code>{process}</code></td><td><code>triggerName</code>, or <code>?</code> when the chain was empty.</td></tr>
+            <tr><td><code>{subcommand}</code></td><td>First non-flag argv token after argv[0]. Empty if not parseable.</td></tr>
+            <tr><td><code>{argv}</code></td><td>Pretty-printed command line, with argv[0] stripped to its basename. Empty if argv is empty.</td></tr>
+            <tr><td><code>{cwd}</code></td><td>Tidied working directory. Empty if <code>nil</code>, <code>""</code>, or <code>/</code>.</td></tr>
+            <tr><td><code>{op_uri}</code></td><td>First argv element starting with <code>op://</code>. Empty if none.</td></tr>
+            <tr><td><code>{op_phrase}</code></td><td>Phrase like <code>read op://X/Y</code> or <code>use 'op item get'</code> parsed from the <code>op</code> argv. Empty when argv isn't a recognizable <code>op</code> invocation.</td></tr>
+            <tr><td><code>{plugin_remote}</code></td><td>Plugin git remote URL. Empty when no Claude plugin update was detected.</td></tr>
+            <tr><td><code>{repo}</code></td><td>Plugin <code>org/repo</code>. Empty when unresolvable.</td></tr>
+            <tr><td><code>{source}</code></td><td>Plugin source type (marketplace name, etc.).</td></tr>
+            <tr><td><code>{marketplace}</code></td><td>Resolved marketplace name.</td></tr>
+            <tr><td><code>{argv[N]}</code></td><td>The Nth argv element, 0-indexed. Empty if out of range.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="nspredicate">NSPredicate quick reference</h2>
+      <p>op-who uses Apple's NSPredicate parser, so you get the same syntax as Core Data fetch requests. The relevant subset:</p>
+
+      <h3>Comparison</h3>
+      <pre><code>triggerName == "git"
+binaryVerified == YES
+subcommand != "status"</code></pre>
+      <p><code>YES</code>/<code>NO</code>, <code>TRUE</code>/<code>FALSE</code>, and <code>NIL</code>/<code>NULL</code> are the recognised literals. Keywords are case-insensitive (<code>and</code>, <code>AND</code>, <code>And</code> all work).</p>
+
+      <h3>Logical connectives</h3>
+      <pre><code>triggerName == "git" AND subcommand == "push"
+triggerName == "ssh" OR triggerName == "scp"
+NOT binaryVerified</code></pre>
+
+      <h3>Set membership</h3>
+      <pre><code>triggerName IN {"op-ssh-sign", "ssh-keygen"}
+subcommand IN {"fetch", "pull", "push", "clone"}</code></pre>
+
+      <h3>Quantifiers on collections</h3>
+      <p><code>triggerArgv</code> and <code>chainNames</code> are arrays. Use <code>ANY</code> to match if <em>any</em> element satisfies the test, <code>ALL</code> for <em>every</em> element, <code>NONE</code> for none of them:</p>
+      <pre><code>ANY triggerArgv == "sign"
+ANY chainNames == "claude"
+NONE triggerArgv BEGINSWITH "--debug"</code></pre>
+
+      <h3>String tests</h3>
+      <pre><code>triggerCwd BEGINSWITH "~/git/sunstone"
+cwd ENDSWITH "/tests"
+triggerName CONTAINS "ssh"
+pluginRemoteURL MATCHES ".*github\\.com.*"</code></pre>
+      <p>Append <code>[c]</code> for case-insensitive (<code>BEGINSWITH[c]</code>), <code>[d]</code> for diacritic-insensitive, <code>[cd]</code> for both. <code>MATCHES</code> takes an ICU regex; <code>LIKE</code> takes glob-style <code>?</code>/<code>*</code> wildcards.</p>
+
+      <h3>Whole-predicate literals</h3>
+      <pre><code>TRUEPREDICATE     // always matches
+FALSEPREDICATE    // never matches</code></pre>
+      <p><code>TRUEPREDICATE</code> is what the catch-all final built-in uses.</p>
+
+      <h3>Operator precedence</h3>
+      <p><code>NOT</code> binds tighter than <code>AND</code>, which binds tighter than <code>OR</code>. Use parentheses when you want to be explicit:</p>
+      <pre><code>triggerName == "git" AND (subcommand == "push" OR subcommand == "fetch")</code></pre>
+
+      <h2 id="examples">Examples</h2>
+
+      <h3>Match a specific tool</h3>
+      <pre><code>Name:      ssh into staging
+Predicate: triggerName == "ssh" AND ANY triggerArgv CONTAINS "staging.example.com"
+Template:  is opening an SSH session to staging
+Kind:      ssh</code></pre>
+
+      <h3>Project-scoped rule</h3>
+      <pre><code>Name:      Sunstone repos — git operations
+Predicate: triggerName == "git" AND cwd BEGINSWITH "~/git/sunstone"
+Template:  is running 'git {subcommand}' in a Sunstone repo
+Kind:      ssh</code></pre>
+
+      <h3>Highlight a specific 1Password vault read</h3>
+      <pre><code>Name:      Production secrets
+Predicate: triggerName == "op" AND binaryVerified == YES AND ANY triggerArgv CONTAINS "op://prod"
+Template:  wants to read a production secret ({op_uri})
+Kind:      onePasswordCLI
+Warning:   ✓</code></pre>
+
+      <h3>Replace the actor entirely</h3>
+      <p>When your template names the actor itself, set <strong>Replaces actor</strong>:</p>
+      <pre><code>Name:           Nightly backup script
+Predicate:      triggerName == "op" AND ANY triggerArgv CONTAINS "backup.sh"
+Template:       Nightly backup script wants to read a credential ({op_uri})
+Replaces actor: ✓
+Kind:           onePasswordCLI</code></pre>
+      <p>Without <strong>Replaces actor</strong>, op-who would render this as <code>Your zsh shell Nightly backup script wants to read…</code>, which reads badly.</p>
+
+      <h3>Structured render with a fallback</h3>
+      <p>This is the pattern the built-in plugin-update rules use. Both rules have the same predicate; the first uses a <code>{repo}</code> placeholder that's empty when marketplace metadata is missing, so the engine falls through to the second.</p>
+      <pre><code>Name:           Plugin update (known marketplace)
+Predicate:      triggerName == "git" AND pluginUpdateAvailable == YES
+Template:       Claude plugin update check for {repo} ({source})
+Replaces actor: ✓
+
+Name:           Plugin update (fallback)
+Predicate:      triggerName == "git" AND pluginUpdateAvailable == YES
+Template:       Claude plugin update check from {plugin_remote}
+Replaces actor: ✓</code></pre>
+
+      <h2 id="testing">Testing a rule</h2>
+      <p>The Rules pane has two affordances for trying a rule before relying on it:</p>
+      <ul>
+        <li><strong>Live preview.</strong> As you edit a rule's template, the panel renders it against the most recent matching request in the ring buffer. If the template references a placeholder that doesn't resolve, you'll see a "no preview" message — that's the signal the rule would fall through.</li>
+        <li><strong>Test Predicate sheet.</strong> Replays a draft predicate against every entry in the recent-requests ring buffer (up to 20 entries by default) and shows which ones it matches. Useful for writing a predicate that catches <em>just</em> the requests you mean to catch.</li>
+      </ul>
+      <p>The recent-requests buffer lives at <code>~/Library/Application Support/com.stigbakken.op-who/recent-requests.json</code> if you want to inspect it directly.</p>
+
+      <h2 id="compose">How user rules and built-ins compose</h2>
+      <p>User rules always run first, then built-ins (in their shipped order). Disabling a built-in doesn't remove it from the list — it just sets <code>enabled = false</code> so the engine skips it. This means:</p>
+      <ul>
+        <li>You can author a more specific rule that intercepts requests before a built-in catches them, without disabling the built-in.</li>
+        <li>Disabled built-ins still appear (greyed-out) in the Rules pane so you can re-enable them later.</li>
+        <li>Built-ins are keyed by a stable <code>builtInID</code> slug, not by name or UUID — so renaming or rewording a built-in across releases keeps your disabled-state intact.</li>
+      </ul>
+      <p>If you ever want to start over, the Rules pane has a "Remove All User Rules" button (built-ins are untouched — re-enable any you disabled by toggling their checkboxes in the table), and deleting <code>rules.json</code> returns op-who to a fresh-install state on next launch.</p>
+
+      <div class="note">
+        See also: Apple's <a href="https://developer.apple.com/documentation/foundation/nspredicate">NSPredicate</a> and <a href="https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Predicates/Articles/pSyntax.html">Predicate Format String Syntax</a> docs for the full predicate grammar.
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <span>op-who — MIT licensed</span>
+      <span class="spacer"></span>
+      <a href="index.html">Home</a>
+      <a href="https://github.com/stigsb/op-who">GitHub</a>
+      <a href="https://github.com/stigsb/op-who/blob/main/docs/rules.md">rules.md source</a>
+    </div>
+  </footer>
+
+</body>
+</html>
