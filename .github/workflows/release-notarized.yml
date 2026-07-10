@@ -5,8 +5,10 @@ name: Release (notarized)
 # (Developer ID Installer), publishes the GitHub Release with both artifacts,
 # and updates the stigsb/homebrew-tap cask. Requires these Actions secrets:
 # DEVELOPER_ID_CERTIFICATE_P12 (+ _PASSWORD), DEVELOPER_ID_INSTALLER_P12
-# (+ _PASSWORD), NOTARY_APPLE_ID, NOTARY_PASSWORD, NOTARY_TEAM_ID, and
-# TAP_GITHUB_TOKEN. workflow_dispatch is kept for manual re-runs/testing.
+# (+ _PASSWORD), NOTARY_APPLE_ID, NOTARY_PASSWORD, and TAP_GITHUB_TOKEN.
+# (The Apple Team ID is public — embedded in every signed binary — so it's the
+# `env.NOTARY_TEAM_ID` literal below, not a secret.) workflow_dispatch is kept
+# for manual re-runs/testing.
 #
 # The signing/notary/tap secrets live in the `release` GitHub Environment,
 # whose deployment policy only permits the `v*` tag and the `main` branch —
@@ -20,6 +22,11 @@ on:
 
 permissions:
   contents: write
+
+# The Apple Team ID is public (it's in the cert and every signed binary), so it
+# lives here as a plain value rather than a secret. Propagates to all run steps.
+env:
+  NOTARY_TEAM_ID: HZ76GWS9YM
 
 jobs:
   build:
@@ -102,7 +109,6 @@ jobs:
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
         run: |
           xcrun notarytool submit .build/op-who.zip \
             --apple-id "$NOTARY_APPLE_ID" \
@@ -122,7 +128,6 @@ jobs:
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
         run: scripts/build-pkg.sh
 
       - name: Compute SHA256

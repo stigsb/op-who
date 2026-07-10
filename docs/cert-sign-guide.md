@@ -106,8 +106,9 @@ the Application cert in Part 1 (it signs the `.pkg`).
 | `DEVELOPER_ID_INSTALLER_PASSWORD`   | Password for that `.p12`                                    |
 | `NOTARY_APPLE_ID`                   | Your Apple ID email                                         |
 | `NOTARY_PASSWORD`                   | App-specific password (see section 2.3)                     |
-| `NOTARY_TEAM_ID`                    | Your 10-character Apple Team ID (`HZ76GWS9YM`)              |
 | `TAP_GITHUB_TOKEN`                  | PAT with push access to `stigsb/homebrew-tap`               |
+
+The Apple **Team ID** (`HZ76GWS9YM`) is *not* a secret — it's embedded in every Developer ID–signed binary and in the public certificate — so it lives as the `env.NOTARY_TEAM_ID` literal in the workflow, not in the environment.
 
 Create the environment and its deployment policy once (needs repo admin):
 
@@ -128,7 +129,6 @@ gh secret set DEVELOPER_ID_INSTALLER_P12     --env release < <(base64 -i Develop
 gh secret set DEVELOPER_ID_INSTALLER_PASSWORD --env release
 gh secret set NOTARY_APPLE_ID  --env release
 gh secret set NOTARY_PASSWORD  --env release
-gh secret set NOTARY_TEAM_ID   --env release
 gh secret set TAP_GITHUB_TOKEN --env release
 ```
 
