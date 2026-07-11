@@ -48,4 +48,20 @@ struct BodyTableRenderTests {
         #expect(grid.numberOfColumns == 2)
         #expect(grid.numberOfRows == 3)
     }
+
+    @Test("content view builds with a header row + one entry")
+    func contentViewHasHeaderAndEntry() {
+        // Exercises the header-row construction (full-width pinning + the
+        // top-right elapsed timer). A bad constraint here would fault at
+        // build time rather than surface in a test.
+        let panel = OverlayPanel()
+        let view = panel.buildContentView(entries: [entry(git: nil)])
+        let stack = try! #require(view as? NSStackView)
+        // header + 1 entry.
+        #expect(stack.arrangedSubviews.count == 2)
+        // The header is a horizontal row (op-who label + timer), not a bare label.
+        let header = try! #require(stack.arrangedSubviews.first as? NSStackView)
+        #expect(header.orientation == .horizontal)
+        #expect(header.arrangedSubviews.count == 2)
+    }
 }

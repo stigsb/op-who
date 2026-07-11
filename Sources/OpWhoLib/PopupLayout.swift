@@ -13,12 +13,16 @@ public enum BodyRowStyle: Equatable {
     case action(RequestKind)
     /// "who" line, colored by driver kind.
     case who(DriverKind)
-    /// A labeled context field (git-root/branch/worktree/cwd) — dim label,
-    /// bright value.
-    case field
+    /// A labeled context field — dim label, value colored by `FieldColor`.
+    case field(FieldColor)
     /// The wrapping Claude "asked" prompt line.
     case asked
 }
+
+/// Value tint for a `.field` row. git-root/branch/worktree each get a dedicated
+/// hue so they're findable by color as well as position; `plain` (cwd) keeps
+/// the neutral bright value.
+public enum FieldColor: Equatable { case gitRoot, branch, worktree, plain }
 
 /// Build the ordered body rows for an entry. Pure — no AppKit, no I/O.
 ///
@@ -47,17 +51,17 @@ func bodyRows(entry: OverlayPanel.ProcessEntry, dense: Bool) -> [BodyRow] {
 
     // Location block.
     if let git = entry.gitContext {
-        rows.append(BodyRow(label: "git-root", value: git.root, style: .field))
+        rows.append(BodyRow(label: "git-root", value: git.root, style: .field(.gitRoot)))
         if let branch = git.branch {
-            rows.append(BodyRow(label: "branch", value: branch, style: .field))
+            rows.append(BodyRow(label: "branch", value: branch, style: .field(.branch)))
         }
         if let sub = git.worktreeSubpath {
-            rows.append(BodyRow(label: "worktree", value: sub, style: .field))
+            rows.append(BodyRow(label: "worktree", value: sub, style: .field(.worktree)))
         } else if !dense {
-            rows.append(BodyRow(label: "worktree", value: "(main)", style: .field))
+            rows.append(BodyRow(label: "worktree", value: "(main)", style: .field(.worktree)))
         }
     } else if let cwd = entry.cwd, cwd != "/", !cwd.isEmpty {
-        rows.append(BodyRow(label: "cwd", value: cwd, style: .field))
+        rows.append(BodyRow(label: "cwd", value: cwd, style: .field(.plain)))
     }
 
     // Asked — Claude natural-language prompt, last.

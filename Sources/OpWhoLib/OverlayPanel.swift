@@ -174,21 +174,70 @@ class OverlayPanel {
         return p
     }
 
-    private func buildContentView(entries: [ProcessEntry]) -> NSView {
+    /// Internal (not private) so a regression test can exercise the AppKit
+    /// content assembly — the header row pins itself to the stack's full width
+    /// and hosts the elapsed timer.
+    func buildContentView(entries: [ProcessEntry]) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
 
-        let header = makeLabel("op-who", size: 11, weight: .medium, color: .secondaryLabelColor)
+        // Header row: "op-who" on the left, the live elapsed timer pinned to
+        // the top-right corner. The timer counts up from `shownAt` and belongs
+        // to the whole popup, so it lives here once rather than on each entry's
+        // terminal row (which reclaims that row's trailing space).
+        let header = makeHeaderRow()
         stack.addArrangedSubview(header)
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
+        header.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
 
         for entry in entries {
             stack.addArrangedSubview(buildEntryView(entry))
         }
 
         return stack
+    }
+
+    /// The top header row: "op-who" label leading, elapsed timer trailing
+    /// (top-right corner). Registers the timer with `elapsedLabels`.
+    private func makeHeaderRow() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 8
+
+        let title = makeLabel("op-who", size: 11, weight: .medium, color: .secondaryLabelColor)
+        // Low hugging = absorbs the slack, pushing the timer to the right edge.
+        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(title)
+
+        row.addArrangedSubview(makeElapsedLabel())
+        return row
+    }
+
+    /// Build the elapsed-time label, register it for per-second updates, and
+    /// return it. Counts up from `shownAt` (how long the approval has been
+    /// pending), right-aligned in a fixed-width slot so growing values fill
+    /// from the right instead of shoving the row around.
+    private func makeElapsedLabel() -> NSTextField {
+        let timeLabel = makeLabel(
+            formatElapsed(0),
+            size: 12, weight: .medium,
+            color: elapsedColor(0),
+            mono: true
+        )
+        timeLabel.alignment = .right
+        // 56pt comfortably fits "59m59s" in 12pt mono.
+        timeLabel.translatesAutoresizingMaskIntoConstraints = false
+        timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+        timeLabel.setContentHuggingPriority(.required, for: .horizontal)
+        timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: shownAt))
+        return timeLabel
     }
 
     private func buildEntryView(_ entry: ProcessEntry) -> NSView {
@@ -302,7 +351,7 @@ class OverlayPanel {
         switch row.style {
         case .action(let kind): color = bodyActionColor(kind); weight = .semibold
         case .who(let kind):    color = bodyWhoColor(kind);    weight = .semibold
-        case .field:            color = OverlayColors.brightValue; weight = .regular
+        case .field(let field): color = bodyFieldColor(field);   weight = .regular
         case .asked:            color = OverlayColors.dimLabel;    weight = .regular
         }
         let label = makeLabel(row.value, size: 12, weight: weight, color: color)
@@ -325,6 +374,15 @@ class OverlayPanel {
         case .unverifiedOp:   return OverlayColors.unverifiedOp
         case .ssh:            return OverlayColors.ssh
         case .unknown:        return OverlayColors.brightValue
+        }
+    }
+
+    private func bodyFieldColor(_ field: FieldColor) -> NSColor {
+        switch field {
+        case .gitRoot:  return OverlayColors.gitRoot
+        case .branch:   return OverlayColors.branch
+        case .worktree: return OverlayColors.worktree
+        case .plain:    return OverlayColors.brightValue
         }
     }
 
@@ -401,8 +459,8 @@ class OverlayPanel {
 
         // Trailing shortcuts label: cmux's ⌘N/⌃M (from suffix) and/or iTerm's
         // tab navigation hint (from shortcut). Right-aligned at content size.
+        // The elapsed timer now lives in the top-right header corner, not here.
         let shortcutsText = composeShortcuts(suffix: parts.suffix, shortcut: parts.shortcut)
-        var shortcutsLabel: NSTextField? = nil
         if !shortcutsText.isEmpty {
             let sl = makeLabel(
                 shortcutsText,
@@ -412,33 +470,7 @@ class OverlayPanel {
             sl.setContentHuggingPriority(.required, for: .horizontal)
             sl.setContentCompressionResistancePriority(.required, for: .horizontal)
             row.addArrangedSubview(sl)
-            shortcutsLabel = sl
         }
-
-        // Trailing elapsed-time label. Counts up from when the popup appeared
-        // (`shownAt`), so it reflects how long the approval has been pending
-        // rather than the trigger process's age.
-        let timeLabel = makeLabel(
-            formatElapsed(0),
-            size: 12, weight: .medium,
-            color: elapsedColor(0),
-            mono: true
-        )
-        timeLabel.alignment = .right
-        // Reserve a fixed slot so growing values ("5s" → "10s" → "1m0s")
-        // fill the slot from the right rather than pushing the rest of
-        // the row around. 56pt comfortably fits "59m59s" in 12pt mono.
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-        timeLabel.setContentHuggingPriority(.required, for: .horizontal)
-        timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        // Add visual breathing room between the shortcuts cluster and
-        // the timer so they read as separate concerns.
-        if let sl = shortcutsLabel {
-            row.setCustomSpacing(16, after: sl)
-        }
-        row.addArrangedSubview(timeLabel)
-        elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: shownAt))
 
         return row
     }

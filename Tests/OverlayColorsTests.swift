@@ -16,6 +16,7 @@ struct OverlayColorsContrastTests {
         OverlayColors.claude, OverlayColors.editor,
         OverlayColors.verifiedOp, OverlayColors.unverifiedOp,
         OverlayColors.ssh, OverlayColors.dimLabel,
+        OverlayColors.gitRoot, OverlayColors.branch, OverlayColors.worktree,
     ]
 
     @Test("body colors pass AA 4.5:1 in light mode")

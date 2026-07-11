@@ -24,6 +24,21 @@ public enum OverlayColors {
     public static let ssh = dynamic(
         light: NSColor(srgbRed: 0.0, green: 0.35, blue: 0.80, alpha: 1),
         dark:  NSColor(srgbRed: 0.45, green: 0.72, blue: 1.0, alpha: 1))
+
+    // Dedicated location-field colors. Each of git-root / branch / worktree
+    // keeps its own hue in a fixed row so the value can be found by color as
+    // well as position. Chosen from the palette's still-free hues (gold, rose,
+    // slate) so they don't echo the action/who row colors above them.
+    public static let gitRoot = dynamic(
+        light: NSColor(srgbRed: 0.56, green: 0.42, blue: 0.0, alpha: 1),
+        dark:  NSColor(srgbRed: 0.93, green: 0.77, blue: 0.33, alpha: 1))
+    public static let branch = dynamic(
+        light: NSColor(srgbRed: 0.74, green: 0.14, blue: 0.44, alpha: 1),
+        dark:  NSColor(srgbRed: 1.0, green: 0.55, blue: 0.80, alpha: 1))
+    public static let worktree = dynamic(
+        light: NSColor(srgbRed: 0.24, green: 0.36, blue: 0.56, alpha: 1),
+        dark:  NSColor(srgbRed: 0.62, green: 0.74, blue: 0.95, alpha: 1))
+
     public static let dimLabel = NSColor.secondaryLabelColor
     public static let brightValue = NSColor.labelColor
 
