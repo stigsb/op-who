@@ -74,3 +74,70 @@ public struct GitContext: Equatable {
         return (ups + downs).joined(separator: "/")
     }
 }
+
+/// Gather git context for `cwd` by running one `git rev-parse`. Returns nil
+/// when `cwd` is not inside a repository, git is missing, or the call errors.
+/// `cwd` may be home-abbreviated ("~/…"); the leading `~` is expanded first.
+public func gitContext(forCwd cwd: String) -> GitContext? {
+    let path = expandTilde(cwd)
+    guard let out = runGit(
+        ["-C", path, "rev-parse", "--path-format=absolute",
+         "--show-toplevel", "--git-common-dir", "--abbrev-ref", "HEAD"]
+    ) else { return nil }
+
+    let lines = out.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { String($0) }
+    guard lines.count >= 3 else { return nil }
+    let toplevel = lines[0]
+    let commonDir = lines[1]
+    let branchRaw = lines[2]
+    guard !toplevel.isEmpty, !commonDir.isEmpty else { return nil }
+
+    var detached: String? = nil
+    if branchRaw == "HEAD" {
+        detached = runGit(["-C", path, "rev-parse", "--short", "HEAD"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    return GitContext.make(
+        toplevel: toplevel,
+        gitCommonDir: commonDir,
+        branchRaw: branchRaw,
+        detachedSHA: detached
+    )
+}
+
+private func expandTilde(_ path: String) -> String {
+    if path == "~" { return FileManager.default.homeDirectoryForCurrentUser.path }
+    if path.hasPrefix("~/") {
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(String(path.dropFirst(2))).path
+    }
+    return path
+}
+
+/// Run `git` with `args`, returning trimmed stdout on exit code 0, else nil.
+private func runGit(_ args: [String]) -> String? {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    proc.arguments = args
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    proc.standardError = FileHandle.nullDevice
+    var env = ProcessInfo.processInfo.environment
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    proc.environment = env
+
+    do {
+        try proc.run()
+    } catch {
+        return nil
+    }
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    proc.waitUntilExit()
+    guard proc.terminationStatus == 0 else { return nil }
+    return String(data: data, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}

@@ -65,3 +65,21 @@ struct GitContextMakeTests {
         #expect(g.branch == "a1b2c3d")
     }
 }
+
+@Suite("gitContext(forCwd:)")
+struct GitContextGatherTests {
+    @Test("resolves this repo's own checkout")
+    func selfRepo() {
+        let cwd = FileManager.default.currentDirectoryPath
+        let g = gitContext(forCwd: cwd)
+        #expect(g != nil)
+        #expect(g?.root.hasSuffix("op-who") == true)
+        #expect((g?.branch?.isEmpty ?? true) == false)
+    }
+
+    @Test("non-repo directory returns nil")
+    func nonRepo() {
+        let g = gitContext(forCwd: "/tmp")
+        #expect(g == nil)
+    }
+}
