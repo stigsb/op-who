@@ -10,6 +10,7 @@ final class ConfigWindowController: NSWindowController {
 
     private let generalPane: GeneralPane
     private let rulesPane: RulesPane
+    private var scrollView: NSScrollView?
 
     init(
         ruleStore: RequestRuleStore,
@@ -39,6 +40,21 @@ final class ConfigWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         generalPane.refreshState()
         super.showWindow(sender)
+        resetScrollToTop()
+    }
+
+    /// The Settings window controller is retained and reused, so NSScrollView
+    /// keeps its prior scroll offset — which hides the topmost options on
+    /// reopen. Snap the document view back to the top every time.
+    private func resetScrollToTop() {
+        guard let scroll = scrollView, let doc = scroll.documentView else { return }
+        doc.layoutSubtreeIfNeeded()
+        // The top of the document is y=0 when the clip/doc is flipped, else the
+        // top is the max-Y corner.
+        let clip = scroll.contentView
+        let topY = doc.isFlipped ? 0 : max(0, doc.bounds.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: 0, y: topY))
+        scroll.reflectScrolledClipView(clip)
     }
 
     /// The Configure window lives outside the app's main menu (op-who is an
@@ -123,6 +139,7 @@ final class ConfigWindowController: NSWindowController {
             rulesView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             rulesView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
+        self.scrollView = scroll
         return scroll
     }
 
