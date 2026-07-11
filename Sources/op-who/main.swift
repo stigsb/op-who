@@ -22,6 +22,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        applyAppearance(AppSettings().appearance)
+
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         let trusted = AXIsProcessTrustedWithOptions(options)
 
