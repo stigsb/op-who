@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-11
+
+- Added: Popup layout and formatting cleanup
+- Added: dark mode setting
+- Changed: Popup uses dedicated per-field colors (WCAG AA audited) and an elapsed timer in the top-right.
+- Fixed: Settings window scroll position resets to the top when reopened.
+
 ## [0.10.0] - 2026-07-10
 
 - Added: Secrets in captured argv, inline command snippets, and Claude Code context are redacted before display, logging, or storage.
