@@ -144,6 +144,29 @@ public struct MatchResult: Equatable {
 }
 
 public enum RequestRuleEngine {
+    // Rule predicates are static strings but `evaluate` runs once per candidate
+    // (and more than once per candidate on a single dialog), so parsing each
+    // one afresh every time is pure waste. Memoize the compiled NSPredicate
+    // keyed by predicate text; the key space is bounded by the user's ruleset.
+    private static let predicateCacheLock = NSLock()
+    private static var predicateCache: [String: NSPredicate] = [:]
+
+    private static func compiledPredicate(_ text: String) throws -> NSPredicate {
+        predicateCacheLock.lock()
+        if let cached = predicateCache[text] {
+            predicateCacheLock.unlock()
+            return cached
+        }
+        predicateCacheLock.unlock()
+
+        let parsed = try PredicateParser.parse(text)
+
+        predicateCacheLock.lock()
+        predicateCache[text] = parsed
+        predicateCacheLock.unlock()
+        return parsed
+    }
+
     /// First-match-wins. A rule whose template references a placeholder
     /// that resolves to empty is treated as a non-match so the engine
     /// falls through to the next rule. Rules with `enabled == false`
@@ -157,7 +180,7 @@ public enum RequestRuleEngine {
             guard rule.enabled else { continue }
             let predicate: NSPredicate
             do {
-                predicate = try PredicateParser.parse(rule.predicate)
+                predicate = try compiledPredicate(rule.predicate)
             } catch {
                 Log.app.error(
                     "Skipping rule \(rule.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -248,14 +271,14 @@ private func resolvePlaceholder(_ key: String, context: MatchContext) -> String 
     }
 }
 
-/// Parse the first non-flag argv token after argv[0]. Skips:
+/// All positional (non-flag) argv tokens after argv[0], in order. Skips:
 ///   - `-C value`, `-c value`, `--git-dir value`, `--work-tree value`,
 ///     `--namespace value` (two-token flag forms)
 ///   - any other token starting with `-` (including `--key=value`)
-/// Returns nil when argv is empty or no non-flag token remains.
-public func parseSubcommand(argv: [String]) -> String? {
-    guard !argv.isEmpty else { return nil }
+public func positionalArgvTokens(argv: [String]) -> [String] {
+    guard !argv.isEmpty else { return [] }
     let pairFlags: Set<String> = ["-C", "-c", "--git-dir", "--work-tree", "--namespace"]
+    var tokens: [String] = []
     var i = 1
     while i < argv.count {
         let a = argv[i]
@@ -267,9 +290,16 @@ public func parseSubcommand(argv: [String]) -> String? {
             i += 1
             continue
         }
-        return a
+        tokens.append(a)
+        i += 1
     }
-    return nil
+    return tokens
+}
+
+/// Parse the first non-flag argv token after argv[0]. See `positionalArgvTokens`
+/// for the flag-skipping rules. Returns nil when no positional token remains.
+public func parseSubcommand(argv: [String]) -> String? {
+    positionalArgvTokens(argv: argv).first
 }
 
 // MARK: - Built-in ruleset

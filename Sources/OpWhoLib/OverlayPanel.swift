@@ -44,6 +44,17 @@ class OverlayPanel {
         /// matched built-in after a restart (UUIDs are regenerated each
         /// process run).
         let matchedBuiltInID: String?
+        /// Git context for the trigger's working directory, gathered at
+        /// capture time. nil when the trigger did not run inside a repo.
+        ///
+        /// Declared `var` (not `let`, unlike sibling fields): Swift's
+        /// synthesized memberwise initializer omits an explicit parameter
+        /// entirely for a `let` property that has a default value, so a
+        /// call site could never pass one in. A `var` with a default still
+        /// gets an (optional, defaulted) initializer parameter, which is
+        /// what lets `OnePasswordWatcher` supply a real value while every
+        /// other call site keeps compiling with the `nil` default.
+        var gitContext: GitContext? = nil
     }
 
     private var panel: NSPanel?
@@ -51,6 +62,9 @@ class OverlayPanel {
     /// Trailing time labels updated every second by `elapsedTimer`.
     private var elapsedLabels: [ElapsedLabel] = []
     private var elapsedTimer: Timer?
+
+    /// When true, droppable rows collapse (see AppSettings.densePopup).
+    var densePopup: Bool = false
 
     /// When the overlay was shown. The elapsed-time column counts up from
     /// here — it measures how long the *approval* has been pending, not how
@@ -160,15 +174,25 @@ class OverlayPanel {
         return p
     }
 
-    private func buildContentView(entries: [ProcessEntry]) -> NSView {
+    /// Internal (not private) so a regression test can exercise the AppKit
+    /// content assembly — the header row pins itself to the stack's full width
+    /// and hosts the elapsed timer.
+    func buildContentView(entries: [ProcessEntry]) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
 
-        let header = makeLabel("op-who", size: 11, weight: .medium, color: .secondaryLabelColor)
+        // Header row: "op-who" on the left, the live elapsed timer pinned to
+        // the top-right corner. The timer counts up from `shownAt` and belongs
+        // to the whole popup, so it lives here once rather than on each entry's
+        // terminal row (which reclaims that row's trailing space).
+        let header = makeHeaderRow()
         stack.addArrangedSubview(header)
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
+        header.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
 
         for entry in entries {
             stack.addArrangedSubview(buildEntryView(entry))
@@ -177,13 +201,50 @@ class OverlayPanel {
         return stack
     }
 
+    /// The top header row: "op-who" label leading, elapsed timer trailing
+    /// (top-right corner). Registers the timer with `elapsedLabels`.
+    private func makeHeaderRow() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 8
+
+        let title = makeLabel("op-who", size: 11, weight: .medium, color: .secondaryLabelColor)
+        // Low hugging = absorbs the slack, pushing the timer to the right edge.
+        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(title)
+
+        row.addArrangedSubview(makeElapsedLabel())
+        return row
+    }
+
+    /// Build the elapsed-time label, register it for per-second updates, and
+    /// return it. Counts up from `shownAt` (how long the approval has been
+    /// pending), right-aligned in a fixed-width slot so growing values fill
+    /// from the right instead of shoving the row around.
+    private func makeElapsedLabel() -> NSTextField {
+        let timeLabel = makeLabel(
+            formatElapsed(0),
+            size: 12, weight: .medium,
+            color: elapsedColor(0),
+            mono: true
+        )
+        timeLabel.alignment = .right
+        // 56pt comfortably fits "59m59s" in 12pt mono.
+        timeLabel.translatesAutoresizingMaskIntoConstraints = false
+        timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+        timeLabel.setContentHuggingPriority(.required, for: .horizontal)
+        timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: shownAt))
+        return timeLabel
+    }
+
     private func buildEntryView(_ entry: ProcessEntry) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
-
-        let kind = entry.summary.kind
 
         // Three structured lead lines.
         let terminalRow = makeTerminalRow(entry)
@@ -194,25 +255,10 @@ class OverlayPanel {
         terminalRow.translatesAutoresizingMaskIntoConstraints = false
         terminalRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
         terminalRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
-        stack.addArrangedSubview(makeDriverRow(entry))
-        stack.addArrangedSubview(makeOperationRow(entry, kind: kind))
-
-        // Claude-derived "asked" context (the natural-language prompt).
-        if let prompt = entry.claudeContext?.lastUserPrompt {
-            let label = makeLabel(
-                "“\(prompt)”",
-                size: 11, weight: .regular, color: .secondaryLabelColor
-            )
-            label.lineBreakMode = .byWordWrapping
-            label.maximumNumberOfLines = 3
-            label.cell?.wraps = true
-            // Cap the prompt's layout width at ~40% of screen width so a long
-            // prompt wraps instead of stretching the overlay. Other rows are
-            // single-line truncate-tail, so the prompt is the only line that
-            // can blow up the panel width.
-            label.preferredMaxLayoutWidth = promptMaxLayoutWidth()
-            stack.addArrangedSubview(label)
-        }
+        let bodyTable = makeBodyTable(entry)
+        stack.addArrangedSubview(bodyTable)
+        // Sit the table directly under the terminal row — no blank gap.
+        stack.setCustomSpacing(0, after: terminalRow)
 
         // Technical detail block: hidden by default. Toggled by a small
         // disclosure button so a curious user can drop down chain/pid/argv.
@@ -221,8 +267,10 @@ class OverlayPanel {
         detailsContainer.alignment = .leading
         detailsContainer.spacing = 2
         detailsContainer.isHidden = true
-        detailsContainer.addArrangedSubview(makeChainDetailLabel(entry))
-        for line in detailLines(for: entry) {
+        detailsContainer.addArrangedSubview(makeProcessTreeLabel(entry))
+        // Blank spacer line between the tree and the YAML block.
+        detailsContainer.addArrangedSubview(makeDimDetailLabel(" "))
+        for line in detailsYAMLLines(entry: entry) {
             detailsContainer.addArrangedSubview(makeDimDetailLabel(line))
         }
 
@@ -262,6 +310,88 @@ class OverlayPanel {
         }
 
         return stack
+    }
+
+    // MARK: - Body table
+
+    /// Render the ordered `bodyRows` as an aligned two-column grid: dim labels
+    /// in a fixed first column, values in the second. The action row spans with
+    /// no label; the "asked" row wraps.
+    ///
+    /// Internal (not private) so a regression test can exercise the AppKit
+    /// grid construction directly — an earlier version indexed `column(at: 0)`
+    /// on an empty `NSGridView`, which throws NSRangeException at runtime.
+    func makeBodyTable(_ entry: ProcessEntry) -> NSView {
+        let rows = bodyRows(entry: entry, dense: densePopup)
+        // Build the whole cell matrix up front and hand it to
+        // NSGridView(views:), which creates the rows AND columns in one shot.
+        // A bare `NSGridView()` has zero columns until a row is added, so
+        // touching `column(at: 0)` before that throws NSRangeException.
+        let cells: [[NSView]] = rows.map { row in
+            [
+                makeLabel(
+                    row.label ?? "", size: 11, weight: .regular,
+                    color: OverlayColors.dimLabel, mono: true
+                ),
+                makeBodyValueLabel(row),
+            ]
+        }
+        let grid = NSGridView(views: cells)
+        grid.rowSpacing = 3
+        grid.columnSpacing = 10
+        if grid.numberOfColumns > 0 {
+            grid.column(at: 0).xPlacement = .leading
+        }
+        return grid
+    }
+
+    private func makeBodyValueLabel(_ row: BodyRow) -> NSTextField {
+        let color: NSColor
+        let weight: NSFont.Weight
+        switch row.style {
+        case .action(let kind): color = bodyActionColor(kind); weight = .semibold
+        case .who(let kind):    color = bodyWhoColor(kind);    weight = .semibold
+        case .field(let field): color = bodyFieldColor(field);   weight = .regular
+        case .asked:            color = OverlayColors.dimLabel;    weight = .regular
+        }
+        let label = makeLabel(row.value, size: 12, weight: weight, color: color)
+        if case .asked = row.style {
+            label.lineBreakMode = .byWordWrapping
+            label.maximumNumberOfLines = 3
+            label.cell?.wraps = true
+            label.preferredMaxLayoutWidth = promptMaxLayoutWidth()
+        } else {
+            label.lineBreakMode = .byTruncatingTail
+            label.maximumNumberOfLines = 1
+        }
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return label
+    }
+
+    private func bodyActionColor(_ kind: RequestKind) -> NSColor {
+        switch kind {
+        case .onePasswordCLI: return OverlayColors.verifiedOp
+        case .unverifiedOp:   return OverlayColors.unverifiedOp
+        case .ssh:            return OverlayColors.ssh
+        case .unknown:        return OverlayColors.brightValue
+        }
+    }
+
+    private func bodyFieldColor(_ field: FieldColor) -> NSColor {
+        switch field {
+        case .gitRoot:  return OverlayColors.gitRoot
+        case .branch:   return OverlayColors.branch
+        case .worktree: return OverlayColors.worktree
+        case .plain:    return OverlayColors.brightValue
+        }
+    }
+
+    private func bodyWhoColor(_ kind: DriverKind) -> NSColor {
+        switch kind {
+        case .claude: return OverlayColors.claude
+        case .editor: return OverlayColors.editor
+        case .shell, .other: return OverlayColors.brightValue
+        }
     }
 
     // MARK: - Lead rows (icon + text)
@@ -329,8 +459,8 @@ class OverlayPanel {
 
         // Trailing shortcuts label: cmux's ⌘N/⌃M (from suffix) and/or iTerm's
         // tab navigation hint (from shortcut). Right-aligned at content size.
+        // The elapsed timer now lives in the top-right header corner, not here.
         let shortcutsText = composeShortcuts(suffix: parts.suffix, shortcut: parts.shortcut)
-        var shortcutsLabel: NSTextField? = nil
         if !shortcutsText.isEmpty {
             let sl = makeLabel(
                 shortcutsText,
@@ -340,33 +470,7 @@ class OverlayPanel {
             sl.setContentHuggingPriority(.required, for: .horizontal)
             sl.setContentCompressionResistancePriority(.required, for: .horizontal)
             row.addArrangedSubview(sl)
-            shortcutsLabel = sl
         }
-
-        // Trailing elapsed-time label. Counts up from when the popup appeared
-        // (`shownAt`), so it reflects how long the approval has been pending
-        // rather than the trigger process's age.
-        let timeLabel = makeLabel(
-            formatElapsed(0),
-            size: 12, weight: .medium,
-            color: elapsedColor(0),
-            mono: true
-        )
-        timeLabel.alignment = .right
-        // Reserve a fixed slot so growing values ("5s" → "10s" → "1m0s")
-        // fill the slot from the right rather than pushing the rest of
-        // the row around. 56pt comfortably fits "59m59s" in 12pt mono.
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-        timeLabel.setContentHuggingPriority(.required, for: .horizontal)
-        timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        // Add visual breathing room between the shortcuts cluster and
-        // the timer so they read as separate concerns.
-        if let sl = shortcutsLabel {
-            row.setCustomSpacing(16, after: sl)
-        }
-        row.addArrangedSubview(timeLabel)
-        elapsedLabels.append(ElapsedLabel(label: timeLabel, startTime: shownAt))
 
         return row
     }
@@ -450,125 +554,6 @@ class OverlayPanel {
         return p.main
     }
 
-    /// Row 2: the user-recognizable process driving the trigger.
-    /// "Claude Code", a known editor/IDE, or the nearest shell name.
-    /// Shows the app icon when the driver maps to a known macOS bundle.
-    private func makeDriverRow(_ entry: ProcessEntry) -> NSView {
-        let info = driverDescription(
-            chain: entry.chain, claudeSession: entry.claudeSession
-        )
-        let color: NSColor
-        let weight: NSFont.Weight
-        switch info.kind {
-        // Distinct from the operation row's colors (which use systemBlue for
-        // .ssh and systemGreen for op CLI), so the "who" and "what" lines
-        // read as visually separate.
-        case .claude: color = .systemPurple; weight = .semibold
-        case .editor: color = .systemTeal;   weight = .semibold
-        case .shell:  color = .labelColor;   weight = .medium
-        case .other:  color = .labelColor;   weight = .medium
-        }
-        // Append the script name (when an interpreter is in the chain) and
-        // the requesting process's cwd in a subdued color. Skips "/" CWDs
-        // (which means we never found a meaningful directory). The script
-        // is suppressed when Claude Code is the actor — its session label
-        // already carries the project context.
-        let dimSuffix: String? = {
-            var parts: [String] = []
-            if entry.claudeSession == nil, let s = entry.scriptInfo {
-                parts.append(s.scriptName)
-            }
-            if let c = entry.cwd, c != "/", !c.isEmpty {
-                parts.append(c)
-            }
-            return parts.isEmpty ? nil : parts.joined(separator: " · ")
-        }()
-        return makeIconRow(
-            icon: appIcon(bundleID: info.bundleID),
-            text: info.text,
-            size: 12, weight: weight, color: color,
-            dimSuffix: dimSuffix
-        )
-    }
-
-    /// Row 3: the requested operation — `op item list`, `op read op://X/Y`,
-    /// `git fetch origin`, etc. Color-coded by kind.
-    private func makeOperationRow(_ entry: ProcessEntry, kind: RequestKind) -> NSView {
-        if let update = entry.pluginUpdate {
-            return makeIconRow(
-                icon: nil,
-                text: "plugin update check from \(update.remoteURL)",
-                size: 12, weight: .medium, color: .secondaryLabelColor,
-                mono: true
-            )
-        }
-        let text = operationDisplay(argv: entry.triggerArgv, chain: entry.chain, cwd: entry.cwd)
-        return makeIconRow(
-            icon: nil,
-            text: text,
-            size: 12, weight: .medium, color: operationColor(kind: kind),
-            mono: true
-        )
-    }
-
-    /// Build a horizontal row: small icon (or 16pt spacer) on the left,
-    /// a single-line label on the right. When `dimSuffix` is non-empty the
-    /// label is rendered as an attributed string with the suffix tinted in
-    /// `secondaryLabelColor` — used to append context like the requesting
-    /// process's cwd after the driver name.
-    private func makeIconRow(
-        icon: NSImage?,
-        text: String,
-        size: CGFloat,
-        weight: NSFont.Weight,
-        color: NSColor,
-        mono: Bool = false,
-        dimSuffix: String? = nil
-    ) -> NSStackView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-
-        let leadingDim: CGFloat = 16
-        if let icon = icon {
-            let iv = NSImageView()
-            iv.image = icon
-            iv.imageScaling = .scaleProportionallyDown
-            iv.translatesAutoresizingMaskIntoConstraints = false
-            iv.widthAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            iv.heightAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            row.addArrangedSubview(iv)
-        } else {
-            let spacer = NSView()
-            spacer.translatesAutoresizingMaskIntoConstraints = false
-            spacer.widthAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            spacer.heightAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            row.addArrangedSubview(spacer)
-        }
-
-        let label = makeLabel(text, size: size, weight: weight, color: color, mono: mono)
-        if let suffix = dimSuffix, !suffix.isEmpty {
-            let font = mono
-                ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-                : NSFont.systemFont(ofSize: size, weight: weight)
-            let attr = NSMutableAttributedString(
-                string: text,
-                attributes: [.font: font, .foregroundColor: color]
-            )
-            attr.append(NSAttributedString(
-                string: " \(suffix)",
-                attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
-            ))
-            label.attributedStringValue = attr
-        }
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        row.addArrangedSubview(label)
-        return row
-    }
-
     private func makeLabel(
         _ text: String,
         size: CGFloat,
@@ -585,34 +570,6 @@ class OverlayPanel {
         return label
     }
 
-    /// Build the small, dim detail rows displayed under the process chain:
-    /// `pid · tty`, `cwd ~/...`, and `argv …`.  Each row is only added when
-    /// the underlying data is present.
-    private func detailLines(for entry: ProcessEntry) -> [String] {
-        var lines: [String] = []
-        var ids = "pid \(entry.pid)"
-        if let tty = entry.tty { ids += " · \(tty)" }
-        lines.append(ids)
-
-        if let cwd = entry.cwd {
-            lines.append("cwd: \(cwd)")
-        }
-        if let s = entry.scriptInfo {
-            var line = "script: \(s.interpreter) \(s.scriptName)"
-            if let p = s.scriptPath, p != s.scriptName { line += " (\(p))" }
-            lines.append(line)
-        }
-        if !entry.triggerArgv.isEmpty {
-            lines.append("argv: \(entry.triggerArgv.joined(separator: " "))")
-        }
-        if let ws = entry.cmuxWorkspaceID {
-            var line = "cmux: workspace=\(ws)"
-            if let tab = entry.cmuxTabID { line += " · tab=\(tab)" }
-            lines.append(line)
-        }
-        return lines
-    }
-
     /// Small grey monospaced label for an auxiliary detail row.
     private func makeDimDetailLabel(_ text: String) -> NSTextField {
         let label = makeLabel(text, size: 11, weight: .regular, color: .secondaryLabelColor, mono: true)
@@ -622,35 +579,35 @@ class OverlayPanel {
         return label
     }
 
-    /// One-line tertiary detail combining the process chain alone.
-    /// Kept small and dim so the human-readable summary leads the entry.
-    private func makeChainDetailLabel(_ entry: ProcessEntry) -> NSTextField {
-        let label = makeLabel("", size: 11, weight: .regular, mono: true)
+    /// Render the parent-first process tree as a single monospaced label with
+    /// `└─` connectors and PIDs in parens. The `op` node is colored.
+    private func makeProcessTreeLabel(_ entry: ProcessEntry) -> NSTextField {
+        let appName = humanTerminalName(bundleID: entry.terminalBundleID)
+        let nodes = processTreeNodes(
+            appName: appName, appPID: entry.terminalPID, chain: entry.chain
+        )
         let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        let attributed = NSMutableAttributedString()
-
-        for (index, node) in entry.chain.enumerated() {
-            if index > 0 {
-                attributed.append(NSAttributedString(
-                    string: " \u{2192} ",
-                    attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
-                ))
-            }
+        let out = NSMutableAttributedString()
+        for (i, node) in nodes.enumerated() {
+            if i > 0 { out.append(NSAttributedString(string: "\n")) }
+            let indent = node.depth == 0
+                ? ""
+                : String(repeating: "   ", count: node.depth - 1) + "\u{2514}\u{2500} "
             let color: NSColor
-            if node.name == "op" {
-                color = node.isVerifiedOnePasswordCLI ? .systemGreen : .systemOrange
-            } else {
-                color = .secondaryLabelColor
+            switch node.opColor {
+            case .verified:   color = OverlayColors.verifiedOp
+            case .unverified: color = OverlayColors.unverifiedOp
+            case .none:       color = OverlayColors.dimLabel
             }
-            attributed.append(NSAttributedString(
-                string: node.chainDisplayName,
+            out.append(NSAttributedString(
+                string: "\(indent)\(node.name) (\(node.pid))",
                 attributes: [.font: font, .foregroundColor: color]
             ))
         }
-
-        label.attributedStringValue = attributed
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
+        let label = NSTextField(labelWithAttributedString: out)
+        label.isSelectable = true
+        label.lineBreakMode = .byClipping
+        label.maximumNumberOfLines = 0
         return label
     }
 
@@ -669,20 +626,6 @@ class OverlayPanel {
     }
 
     // MARK: - Color & icon
-
-    /// Color-code the operation line by request kind:
-    ///   - verified op:   green
-    ///   - unverified op: orange (warning)
-    ///   - ssh / git:     blue
-    ///   - unknown:       default label
-    private func operationColor(kind: RequestKind) -> NSColor {
-        switch kind {
-        case .onePasswordCLI: return .systemGreen
-        case .unverifiedOp:   return .systemOrange
-        case .ssh:            return .systemBlue
-        case .unknown:        return .labelColor
-        }
-    }
 
     /// Compose the shortcuts label content from `parts.suffix` (cmux's
     /// " ⌘N ⌃M") and `parts.shortcut` (iTerm's "⌘3" or "window 2 ⌘1").

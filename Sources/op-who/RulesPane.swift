@@ -922,32 +922,13 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     /// Non-flag argv tokens after argv[0], with the parsed subcommand
-    /// (if any) excluded. Mirrors `parseSubcommand`'s flag handling: pair
+    /// (if any) excluded. Shares `positionalArgvTokens`' flag handling: pair
     /// flags like `-C path` are skipped as a unit so the path doesn't
     /// leak in as if it were a positional argument.
     private func nonFlagArgvTokens(argv: [String], skipSubcommand: String?) -> [String] {
-        guard argv.count > 1 else { return [] }
-        let pairFlags: Set<String> = ["-C", "-c", "--git-dir", "--work-tree", "--namespace"]
-        var tokens: [String] = []
-        var subcommandConsumed = (skipSubcommand == nil)
-        var i = 1
-        while i < argv.count {
-            let a = argv[i]
-            if pairFlags.contains(a) {
-                i += 2
-                continue
-            }
-            if a.hasPrefix("-") {
-                i += 1
-                continue
-            }
-            if !subcommandConsumed, a == skipSubcommand {
-                subcommandConsumed = true
-                i += 1
-                continue
-            }
-            tokens.append(a)
-            i += 1
+        var tokens = positionalArgvTokens(argv: argv)
+        if let sub = skipSubcommand, let idx = tokens.firstIndex(of: sub) {
+            tokens.remove(at: idx)
         }
         return tokens
     }
@@ -1020,7 +1001,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         commentView.string = ""
         replacesActorCheckbox.state = .off
         isWarningCheckbox.state = .off
-        kindPopup.selectItem(at: 3)
+        kindPopup.selectItem(withTitle: RequestKind.unknown.rawValue)
         builtInNotice.isHidden = true
         detailBox.title = "Selected rule"
     }

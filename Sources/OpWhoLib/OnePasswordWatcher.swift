@@ -325,6 +325,8 @@ public class OnePasswordWatcher {
             )
             let matchResult = RequestRuleEngine.evaluate(rules: OpWhoConfig.rules, context: matchContext)
 
+            let gitCtx: GitContext? = cwd.flatMap { gitContext(forCwd: $0) }
+
             let entry = OverlayPanel.ProcessEntry(
                 pid: triggerPID,
                 chain: foldedChain,
@@ -346,7 +348,8 @@ public class OnePasswordWatcher {
                 summary: summary,
                 matchedRuleID: matchResult?.rule.id,
                 matchedRuleName: matchResult?.rule.name,
-                matchedBuiltInID: matchResult?.rule.builtInID
+                matchedBuiltInID: matchResult?.rule.builtInID,
+                gitContext: gitCtx
             )
 
             candidates.append(TriggerCandidate(
@@ -424,6 +427,7 @@ public class OnePasswordWatcher {
         if overlayPanel == nil {
             overlayPanel = OverlayPanel()
         }
+        overlayPanel?.densePopup = AppSettings().densePopup
         overlayPanel?.show(entries: entries, near: windowFrame)
     }
 
