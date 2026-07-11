@@ -1,0 +1,64 @@
+name: CodeQL
+
+# Advanced-setup CodeQL analysis. Replaces the repo's previous "Default setup"
+# (which analyzed swift/actions but never ran the Swift analysis on pull
+# requests — so PRs got the "configuration present on main was not found:
+# /language:swift" warning). Advanced setup runs Swift on a macOS runner with an
+# explicit `swift build`, so the swift analysis runs on PRs too and the base/PR
+# configs match. Default setup and advanced setup are mutually exclusive, so
+# default setup must be disabled for this workflow to run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly baseline scan (matches the cadence default setup used).
+    - cron: '31 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Swift is a compiled language: it needs a macOS runner and a build.
+          - language: swift
+            build-mode: manual
+            runner: macos-latest
+          # Workflow YAML and the one helper script are interpreted: no build.
+          - language: actions
+            build-mode: none
+            runner: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@02c5e83432fe5497fd85b873b6c9f16a8578e1d9 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Manual build for Swift — mirrors test.yml, which we know compiles the
+      # package cleanly on macos-latest.
+      - name: Build (Swift)
+        if: matrix.build-mode == 'manual'
+        run: swift build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@02c5e83432fe5497fd85b873b6c9f16a8578e1d9 # v3
+        with:
+          # Category must match the config name on main ("/language:swift" etc.)
+          # so code scanning can diff PR alerts against the base branch.
+          category: "/language:${{ matrix.language }}"
