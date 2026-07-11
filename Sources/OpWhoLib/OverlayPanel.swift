@@ -44,6 +44,17 @@ class OverlayPanel {
         /// matched built-in after a restart (UUIDs are regenerated each
         /// process run).
         let matchedBuiltInID: String?
+        /// Git context for the trigger's working directory, gathered at
+        /// capture time. nil when the trigger did not run inside a repo.
+        ///
+        /// Declared `var` (not `let`, unlike sibling fields): Swift's
+        /// synthesized memberwise initializer omits an explicit parameter
+        /// entirely for a `let` property that has a default value, so a
+        /// call site could never pass one in. A `var` with a default still
+        /// gets an (optional, defaulted) initializer parameter, which is
+        /// what lets `OnePasswordWatcher` supply a real value while every
+        /// other call site keeps compiling with the `nil` default.
+        var gitContext: GitContext? = nil
     }
 
     private var panel: NSPanel?
