@@ -46,8 +46,12 @@ Implementation:
 - `root` = parent of `--git-common-dir` when it ends in `/.git`; otherwise the
   top-level itself. This resolves to the **main** worktree even when the cwd is
   a linked worktree.
-- `worktreeSubpath` = `--show-toplevel` made relative to `root`; `nil` when they
-  are equal (main checkout).
+- `worktreeSubpath` = `--show-toplevel` made relative to `root`. `nil` when they
+  are equal — checked *before* the relative path is computed (main checkout).
+  If the relative path ascends more than one level (starts with `../../`), fall
+  back to the absolute, home-abbreviated path instead. This keeps a sibling
+  worktree (`../foo`) readable while showing a far-flung one — e.g. a Claude
+  `/tmp/…` checkout — as a full path rather than a `../../../…` tangle.
 - `branch` = `--abbrev-ref HEAD`; when that is `HEAD` (detached), fall back to
   `git -C <cwd> rev-parse --short HEAD`.
 - Any non-zero exit, timeout (short, ~1s), or unreadable output → `nil`.
@@ -79,7 +83,8 @@ unverified `op` (warning), blue ssh/git, label color for unknown.
 
 The **who** row keeps the current driver coloring (purple Claude, teal editor,
 label-color shell) and its icon, and still appends the detected script
-(`bash · python deploy.py`).
+(`bash · python deploy.py`). All popup text colors (see §4.2 for the audit and
+the appearance setting) must meet WCAG AA contrast in both light and dark mode.
 
 The **asked** row is placed *below* the location block so the git rows sit at a
 fixed offset directly under `who`, unaffected by whether a (variable-height)
@@ -113,8 +118,8 @@ cmux.app (1234)
 
 tty: /dev/ttys002
 pid: 78288
-workspace: 81E5BE1A-98F5-435C-9747-F8DE11A6FD13
-tab: 81E5BE1A-98F5-435C-9747-F8DE11A6FD13
+workspace: fleet-config (81E5BE1A-98F5-435C-9747-F8DE11A6FD13)
+tab: editor (7C3A9D22-1B04-4E8F-9A11-0F2C6B5E7A31)
 argv:
   - /Applications/1Password.app/Contents/MacOS/op-ssh-sign
   - -Y
@@ -137,14 +142,21 @@ argv:
 
 **YAML block** (after one blank line):
 - `tty:` and `pid:` (trigger pid) on their own lines.
-- `workspace:` and `tab:` on their own lines, values in the value column — only
-  when cmux surface IDs are present.
+- `workspace:` and `tab:` on their own lines — only when cmux surface info is
+  present. Each shows the human title followed by the id in parens,
+  `title (guid)` (from `cmuxSurface.displayWorkspaceTitle` / the surface title),
+  falling back to the bare id when no title is known.
 - `argv:` header followed by one `  - <token>` per argv element. argv is already
   redacted at capture (`SecretRedaction`); rendering does not re-redact.
 - **Dropped:** the `cwd:` line (redundant with the body) and the `script:` line
   (surfaced in the body `who` row).
 
-## 4. "Dense popup" setting (default OFF)
+## 4. Settings window changes
+
+All three new settings live in the existing **Settings window** (not the
+status-bar menu), persisted in the existing config store.
+
+### 4.1 "Dense popup" (default OFF)
 
 A persisted boolean controlling how droppable rows behave. Row **order and
 labels are identical** in both modes; only whether an empty-in-this-instance row
@@ -158,8 +170,35 @@ is reserved differs.
 - **ON — compact:** collapse droppable rows. The `worktree` row is omitted in the
   main checkout.
 
-Surfaced as a checkmarked **status-bar menu item** ("Dense popup"), persisted in
-the existing config store. No changes to the rules/Settings window.
+Rendered as a checkbox placed **immediately after the "Run on startup" option**.
+
+### 4.2 Appearance (default: Follow System) + contrast audit
+
+A three-way appearance override — **Follow System** (default), **Light**,
+**Dark** — persisted in config and applied to the popup and Settings window
+(`NSApp.appearance` / per-window `appearance`). Rendered as a segmented control
+or popup, below "Dense popup".
+
+Audit **every** popup text color against the popup's window background in both
+light and dark appearances and adjust any that fail **WCAG AA** (4.5:1 for the
+small body/detail text, 3:1 for the ≥13pt semibold action row):
+
+- action row: green (verified op) / orange (unverified) / blue (ssh·git) /
+  label color (unknown)
+- who row: purple (Claude) / teal (editor) / label (shell)
+- process-tree op node: green / orange
+- dim labels, timer states (secondary / orange / red)
+
+Where a `system*` accent color fails, substitute a contrast-safe variant (e.g. a
+darker/desaturated tone, or an appearance-conditional pair). The chosen values
+are captured in code as named constants so the audit is reproducible.
+
+### 4.3 Settings-window scroll reset
+
+Bug fix (surfaced during review, unrelated to layout but in the same window):
+the Settings window restores its previous vertical scroll position when
+reopened, which hides the topmost options. On each open, reset the scroll
+position to the top so the first options are always visible.
 
 ## 5. Every render variant, in the canonical layout
 
@@ -203,5 +242,8 @@ Existing `terminalRowParts` tests and behavior are untouched.
 - `Sources/OpWhoLib/OverlayPanel.swift` — new body table + details renderer;
   `ProcessEntry.gitContext`.
 - `Sources/OpWhoLib/OnePasswordWatcher.swift` — gather + pass `gitContext`.
-- Config store — `densePopup` boolean; status-menu toggle in the app target.
+- Config store — `densePopup` boolean + `appearance` (system/light/dark) enum.
+- Settings window (app target) — "Dense popup" checkbox after "Run on startup",
+  appearance control below it, and scroll-position reset on open (§4.3).
+- Popup/app appearance application + contrast-safe color constants (§4.2).
 - Tests under `Tests/…` for the pure functions above.
