@@ -215,8 +215,10 @@ class OverlayPanel {
         detailsContainer.alignment = .leading
         detailsContainer.spacing = 2
         detailsContainer.isHidden = true
-        detailsContainer.addArrangedSubview(makeChainDetailLabel(entry))
-        for line in detailLines(for: entry) {
+        detailsContainer.addArrangedSubview(makeProcessTreeLabel(entry))
+        // Blank spacer line between the tree and the YAML block.
+        detailsContainer.addArrangedSubview(makeDimDetailLabel(" "))
+        for line in detailsYAMLLines(entry: entry) {
             detailsContainer.addArrangedSubview(makeDimDetailLabel(line))
         }
 
@@ -522,34 +524,6 @@ class OverlayPanel {
         return label
     }
 
-    /// Build the small, dim detail rows displayed under the process chain:
-    /// `pid · tty`, `cwd ~/...`, and `argv …`.  Each row is only added when
-    /// the underlying data is present.
-    private func detailLines(for entry: ProcessEntry) -> [String] {
-        var lines: [String] = []
-        var ids = "pid \(entry.pid)"
-        if let tty = entry.tty { ids += " · \(tty)" }
-        lines.append(ids)
-
-        if let cwd = entry.cwd {
-            lines.append("cwd: \(cwd)")
-        }
-        if let s = entry.scriptInfo {
-            var line = "script: \(s.interpreter) \(s.scriptName)"
-            if let p = s.scriptPath, p != s.scriptName { line += " (\(p))" }
-            lines.append(line)
-        }
-        if !entry.triggerArgv.isEmpty {
-            lines.append("argv: \(entry.triggerArgv.joined(separator: " "))")
-        }
-        if let ws = entry.cmuxWorkspaceID {
-            var line = "cmux: workspace=\(ws)"
-            if let tab = entry.cmuxTabID { line += " · tab=\(tab)" }
-            lines.append(line)
-        }
-        return lines
-    }
-
     /// Small grey monospaced label for an auxiliary detail row.
     private func makeDimDetailLabel(_ text: String) -> NSTextField {
         let label = makeLabel(text, size: 11, weight: .regular, color: .secondaryLabelColor, mono: true)
@@ -559,35 +533,35 @@ class OverlayPanel {
         return label
     }
 
-    /// One-line tertiary detail combining the process chain alone.
-    /// Kept small and dim so the human-readable summary leads the entry.
-    private func makeChainDetailLabel(_ entry: ProcessEntry) -> NSTextField {
-        let label = makeLabel("", size: 11, weight: .regular, mono: true)
+    /// Render the parent-first process tree as a single monospaced label with
+    /// `└─` connectors and PIDs in parens. The `op` node is colored.
+    private func makeProcessTreeLabel(_ entry: ProcessEntry) -> NSTextField {
+        let appName = humanTerminalName(bundleID: entry.terminalBundleID)
+        let nodes = processTreeNodes(
+            appName: appName, appPID: entry.terminalPID, chain: entry.chain
+        )
         let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        let attributed = NSMutableAttributedString()
-
-        for (index, node) in entry.chain.enumerated() {
-            if index > 0 {
-                attributed.append(NSAttributedString(
-                    string: " \u{2192} ",
-                    attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
-                ))
-            }
+        let out = NSMutableAttributedString()
+        for (i, node) in nodes.enumerated() {
+            if i > 0 { out.append(NSAttributedString(string: "\n")) }
+            let indent = node.depth == 0
+                ? ""
+                : String(repeating: "   ", count: node.depth - 1) + "\u{2514}\u{2500} "
             let color: NSColor
-            if node.name == "op" {
-                color = node.isVerifiedOnePasswordCLI ? .systemGreen : .systemOrange
-            } else {
-                color = .secondaryLabelColor
+            switch node.opColor {
+            case .verified:   color = OverlayColors.verifiedOp
+            case .unverified: color = OverlayColors.unverifiedOp
+            case .none:       color = OverlayColors.dimLabel
             }
-            attributed.append(NSAttributedString(
-                string: node.chainDisplayName,
+            out.append(NSAttributedString(
+                string: "\(indent)\(node.name) (\(node.pid))",
                 attributes: [.font: font, .foregroundColor: color]
             ))
         }
-
-        label.attributedStringValue = attributed
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
+        let label = NSTextField(labelWithAttributedString: out)
+        label.isSelectable = true
+        label.lineBreakMode = .byClipping
+        label.maximumNumberOfLines = 0
         return label
     }
 
