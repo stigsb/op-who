@@ -67,3 +67,63 @@ func bodyRows(entry: OverlayPanel.ProcessEntry, dense: Bool) -> [BodyRow] {
 
     return rows
 }
+
+/// One node of the rendered process tree.
+public struct TreeNode: Equatable {
+    public let name: String
+    public let pid: pid_t
+    /// 0 = parent-est (usually the terminal app); each child is +1.
+    public let depth: Int
+    /// Coloring hint for the `op` node; `.none` for every other node.
+    public let opColor: OpColor
+}
+
+public enum OpColor: Equatable { case none, verified, unverified }
+
+/// Build the process tree parent-first. `chain` is trigger-first (chain[0] is
+/// the trigger); it is reversed here. The terminal app, when known, is
+/// prepended as the root (`<name>.app`). Pure — no AppKit.
+func processTreeNodes(appName: String?, appPID: pid_t?, chain: [ProcessNode]) -> [TreeNode] {
+    var nodes: [TreeNode] = []
+    var depth = 0
+    if let appName = appName {
+        nodes.append(TreeNode(name: "\(appName).app", pid: appPID ?? 0,
+                              depth: depth, opColor: .none))
+        depth += 1
+    }
+    for node in chain.reversed() {
+        let color: OpColor
+        if node.name == "op" {
+            color = node.isVerifiedOnePasswordCLI ? .verified : .unverified
+        } else {
+            color = .none
+        }
+        nodes.append(TreeNode(name: node.name, pid: node.pid, depth: depth, opColor: color))
+        depth += 1
+    }
+    return nodes
+}
+
+/// The YAML lines shown under the process tree in the details block.
+/// No cwd (spec). Pure — argv is already redacted at capture.
+func detailsYAMLLines(entry: OverlayPanel.ProcessEntry) -> [String] {
+    var lines: [String] = []
+    if let tty = entry.tty { lines.append("tty: \(tty)") }
+    lines.append("pid: \(entry.pid)")
+
+    if let ws = entry.cmuxWorkspaceID {
+        let title = entry.cmuxSurface?.displayWorkspaceTitle ?? ""
+        lines.append(title.isEmpty ? "workspace: \(ws)" : "workspace: \(title) (\(ws))")
+    }
+    if let tab = entry.cmuxTabID {
+        let raw = entry.cmuxSurface?.surfaceTitle ?? ""
+        let title = CmuxHelper.looksGenericTitle(raw) ? "" : raw
+        lines.append(title.isEmpty ? "tab: \(tab)" : "tab: \(title) (\(tab))")
+    }
+
+    if !entry.triggerArgv.isEmpty {
+        lines.append("argv:")
+        for token in entry.triggerArgv { lines.append("  - \(token)") }
+    }
+    return lines
+}

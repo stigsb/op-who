@@ -108,3 +108,90 @@ struct BodyRowsTests {
         #expect(rows[0].value == "signing a commit")
     }
 }
+
+@Suite("processTreeNodes")
+struct ProcessTreeNodesTests {
+    private func node(_ name: String, pid: pid_t, op: Bool = false, verified: Bool = false) -> ProcessNode {
+        ProcessNode(pid: pid, ppid: 1, name: name, tty: nil,
+                    executablePath: nil, isVerifiedOnePasswordCLI: verified)
+    }
+
+    @Test("app prepended, parent-first order, increasing depth")
+    func withApp() {
+        let chain = [node("op-ssh-sign", pid: 78288),
+                     node("git", pid: 1213),
+                     node("bash", pid: 9101)]
+        let nodes = processTreeNodes(appName: "cmux", appPID: 1234, chain: chain)
+        #expect(nodes.map { $0.name } == ["cmux.app", "bash", "git", "op-ssh-sign"])
+        #expect(nodes.map { $0.pid } == [1234, 9101, 1213, 78288])
+        #expect(nodes.map { $0.depth } == [0, 1, 2, 3])
+    }
+
+    @Test("no app: chain alone, depth from 0")
+    func withoutApp() {
+        let chain = [node("op", pid: 5), node("zsh", pid: 6)]
+        let nodes = processTreeNodes(appName: nil, appPID: nil, chain: chain)
+        #expect(nodes.map { $0.name } == ["zsh", "op"])
+        #expect(nodes.map { $0.depth } == [0, 1])
+    }
+
+    @Test("op node flagged for coloring")
+    func opFlagged() {
+        let chain = [node("op", pid: 5, op: true, verified: true)]
+        let nodes = processTreeNodes(appName: nil, appPID: nil, chain: chain)
+        #expect(nodes[0].opColor == .verified)
+    }
+}
+
+@Suite("detailsYAMLLines")
+struct DetailsYAMLTests {
+    private func entry(argv: [String], tty: String?, workspace: (String, String)?, tab: (String, String)?) -> OverlayPanel.ProcessEntry {
+        var surface: CmuxSurfaceInfo? = nil
+        if workspace != nil || tab != nil {
+            surface = CmuxSurfaceInfo(
+                workspaceRef: "ws", workspaceTitle: workspace?.0 ?? "",
+                surfaceRef: "sf", surfaceTitle: tab?.0 ?? "",
+                tty: "/dev/ttys002", workspaceIndex: 1, tabIndex: 1
+            )
+        }
+        return OverlayPanel.ProcessEntry(
+            pid: 78288, chain: [], triggerArgv: argv, tty: tty,
+            tabTitle: nil, tabShortcut: nil, claudeSession: nil, claudeContext: nil,
+            scriptInfo: nil, terminalBundleID: nil, terminalPID: nil,
+            cwd: nil, triggerCwd: nil,
+            cmuxWorkspaceID: workspace?.1, cmuxTabID: tab?.1, cmuxSurface: surface,
+            pluginUpdate: nil,
+            summary: RequestSummary(kind: .unknown, title: "", subtitle: nil, isWarning: false),
+            matchedRuleID: nil, matchedRuleName: nil, matchedBuiltInID: nil
+        )
+    }
+
+    @Test("tty/pid/workspace/tab/argv, no cwd, title (guid)")
+    func fullLines() {
+        let e = entry(
+            argv: ["/Applications/1Password.app/op-ssh-sign", "-Y", "sign"],
+            tty: "/dev/ttys002",
+            workspace: ("fleet", "WS-GUID"),
+            tab: ("editor", "TAB-GUID")
+        )
+        let lines = detailsYAMLLines(entry: e)
+        #expect(lines == [
+            "tty: /dev/ttys002",
+            "pid: 78288",
+            "workspace: fleet (WS-GUID)",
+            "tab: editor (TAB-GUID)",
+            "argv:",
+            "  - /Applications/1Password.app/op-ssh-sign",
+            "  - -Y",
+            "  - sign",
+        ])
+    }
+
+    @Test("bare guid when no title")
+    func bareGuid() {
+        let e = entry(argv: ["op"], tty: nil, workspace: ("", "WS-GUID"), tab: nil)
+        let lines = detailsYAMLLines(entry: e)
+        #expect(lines.contains("workspace: WS-GUID"))
+        #expect(!lines.contains(where: { $0.hasPrefix("tty:") }))
+    }
+}
