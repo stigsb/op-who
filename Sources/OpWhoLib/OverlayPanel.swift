@@ -63,6 +63,9 @@ class OverlayPanel {
     private var elapsedLabels: [ElapsedLabel] = []
     private var elapsedTimer: Timer?
 
+    /// When true, droppable rows collapse (see AppSettings.densePopup).
+    var densePopup: Bool = false
+
     /// When the overlay was shown. The elapsed-time column counts up from
     /// here — it measures how long the *approval* has been pending, not how
     /// long the trigger process has been alive (a long-lived ssh session
@@ -194,8 +197,6 @@ class OverlayPanel {
         stack.alignment = .leading
         stack.spacing = 4
 
-        let kind = entry.summary.kind
-
         // Three structured lead lines.
         let terminalRow = makeTerminalRow(entry)
         stack.addArrangedSubview(terminalRow)
@@ -205,25 +206,7 @@ class OverlayPanel {
         terminalRow.translatesAutoresizingMaskIntoConstraints = false
         terminalRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
         terminalRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
-        stack.addArrangedSubview(makeDriverRow(entry))
-        stack.addArrangedSubview(makeOperationRow(entry, kind: kind))
-
-        // Claude-derived "asked" context (the natural-language prompt).
-        if let prompt = entry.claudeContext?.lastUserPrompt {
-            let label = makeLabel(
-                "“\(prompt)”",
-                size: 11, weight: .regular, color: .secondaryLabelColor
-            )
-            label.lineBreakMode = .byWordWrapping
-            label.maximumNumberOfLines = 3
-            label.cell?.wraps = true
-            // Cap the prompt's layout width at ~40% of screen width so a long
-            // prompt wraps instead of stretching the overlay. Other rows are
-            // single-line truncate-tail, so the prompt is the only line that
-            // can blow up the panel width.
-            label.preferredMaxLayoutWidth = promptMaxLayoutWidth()
-            stack.addArrangedSubview(label)
-        }
+        stack.addArrangedSubview(makeBodyTable(entry))
 
         // Technical detail block: hidden by default. Toggled by a small
         // disclosure button so a curious user can drop down chain/pid/argv.
@@ -273,6 +256,68 @@ class OverlayPanel {
         }
 
         return stack
+    }
+
+    // MARK: - Body table
+
+    /// Render the ordered `bodyRows` as an aligned two-column grid: dim labels
+    /// in a fixed first column, values in the second. The action row spans with
+    /// no label; the "asked" row wraps.
+    private func makeBodyTable(_ entry: ProcessEntry) -> NSView {
+        let rows = bodyRows(entry: entry, dense: densePopup)
+        let grid = NSGridView()
+        grid.rowSpacing = 3
+        grid.columnSpacing = 10
+        grid.column(at: 0).xPlacement = .leading
+
+        for row in rows {
+            let labelView = makeLabel(
+                row.label ?? "", size: 11, weight: .regular, color: OverlayColors.dimLabel, mono: true
+            )
+            let valueView = makeBodyValueLabel(row)
+            grid.addRow(with: [labelView, valueView])
+        }
+        return grid
+    }
+
+    private func makeBodyValueLabel(_ row: BodyRow) -> NSTextField {
+        let color: NSColor
+        let weight: NSFont.Weight
+        switch row.style {
+        case .action(let kind): color = bodyActionColor(kind); weight = .semibold
+        case .who(let kind):    color = bodyWhoColor(kind);    weight = .semibold
+        case .field:            color = OverlayColors.brightValue; weight = .regular
+        case .asked:            color = OverlayColors.dimLabel;    weight = .regular
+        }
+        let label = makeLabel(row.value, size: 12, weight: weight, color: color)
+        if case .asked = row.style {
+            label.lineBreakMode = .byWordWrapping
+            label.maximumNumberOfLines = 3
+            label.cell?.wraps = true
+            label.preferredMaxLayoutWidth = promptMaxLayoutWidth()
+        } else {
+            label.lineBreakMode = .byTruncatingTail
+            label.maximumNumberOfLines = 1
+        }
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return label
+    }
+
+    private func bodyActionColor(_ kind: RequestKind) -> NSColor {
+        switch kind {
+        case .onePasswordCLI: return OverlayColors.verifiedOp
+        case .unverifiedOp:   return OverlayColors.unverifiedOp
+        case .ssh:            return OverlayColors.ssh
+        case .unknown:        return OverlayColors.brightValue
+        }
+    }
+
+    private func bodyWhoColor(_ kind: DriverKind) -> NSColor {
+        switch kind {
+        case .claude: return OverlayColors.claude
+        case .editor: return OverlayColors.editor
+        case .shell, .other: return OverlayColors.brightValue
+        }
     }
 
     // MARK: - Lead rows (icon + text)
@@ -461,125 +506,6 @@ class OverlayPanel {
         return p.main
     }
 
-    /// Row 2: the user-recognizable process driving the trigger.
-    /// "Claude Code", a known editor/IDE, or the nearest shell name.
-    /// Shows the app icon when the driver maps to a known macOS bundle.
-    private func makeDriverRow(_ entry: ProcessEntry) -> NSView {
-        let info = driverDescription(
-            chain: entry.chain, claudeSession: entry.claudeSession
-        )
-        let color: NSColor
-        let weight: NSFont.Weight
-        switch info.kind {
-        // Distinct from the operation row's colors (which use systemBlue for
-        // .ssh and systemGreen for op CLI), so the "who" and "what" lines
-        // read as visually separate.
-        case .claude: color = .systemPurple; weight = .semibold
-        case .editor: color = .systemTeal;   weight = .semibold
-        case .shell:  color = .labelColor;   weight = .medium
-        case .other:  color = .labelColor;   weight = .medium
-        }
-        // Append the script name (when an interpreter is in the chain) and
-        // the requesting process's cwd in a subdued color. Skips "/" CWDs
-        // (which means we never found a meaningful directory). The script
-        // is suppressed when Claude Code is the actor — its session label
-        // already carries the project context.
-        let dimSuffix: String? = {
-            var parts: [String] = []
-            if entry.claudeSession == nil, let s = entry.scriptInfo {
-                parts.append(s.scriptName)
-            }
-            if let c = entry.cwd, c != "/", !c.isEmpty {
-                parts.append(c)
-            }
-            return parts.isEmpty ? nil : parts.joined(separator: " · ")
-        }()
-        return makeIconRow(
-            icon: appIcon(bundleID: info.bundleID),
-            text: info.text,
-            size: 12, weight: weight, color: color,
-            dimSuffix: dimSuffix
-        )
-    }
-
-    /// Row 3: the requested operation — `op item list`, `op read op://X/Y`,
-    /// `git fetch origin`, etc. Color-coded by kind.
-    private func makeOperationRow(_ entry: ProcessEntry, kind: RequestKind) -> NSView {
-        if let update = entry.pluginUpdate {
-            return makeIconRow(
-                icon: nil,
-                text: "plugin update check from \(update.remoteURL)",
-                size: 12, weight: .medium, color: .secondaryLabelColor,
-                mono: true
-            )
-        }
-        let text = operationDisplay(argv: entry.triggerArgv, chain: entry.chain, cwd: entry.cwd)
-        return makeIconRow(
-            icon: nil,
-            text: text,
-            size: 12, weight: .medium, color: operationColor(kind: kind),
-            mono: true
-        )
-    }
-
-    /// Build a horizontal row: small icon (or 16pt spacer) on the left,
-    /// a single-line label on the right. When `dimSuffix` is non-empty the
-    /// label is rendered as an attributed string with the suffix tinted in
-    /// `secondaryLabelColor` — used to append context like the requesting
-    /// process's cwd after the driver name.
-    private func makeIconRow(
-        icon: NSImage?,
-        text: String,
-        size: CGFloat,
-        weight: NSFont.Weight,
-        color: NSColor,
-        mono: Bool = false,
-        dimSuffix: String? = nil
-    ) -> NSStackView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-
-        let leadingDim: CGFloat = 16
-        if let icon = icon {
-            let iv = NSImageView()
-            iv.image = icon
-            iv.imageScaling = .scaleProportionallyDown
-            iv.translatesAutoresizingMaskIntoConstraints = false
-            iv.widthAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            iv.heightAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            row.addArrangedSubview(iv)
-        } else {
-            let spacer = NSView()
-            spacer.translatesAutoresizingMaskIntoConstraints = false
-            spacer.widthAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            spacer.heightAnchor.constraint(equalToConstant: leadingDim).isActive = true
-            row.addArrangedSubview(spacer)
-        }
-
-        let label = makeLabel(text, size: size, weight: weight, color: color, mono: mono)
-        if let suffix = dimSuffix, !suffix.isEmpty {
-            let font = mono
-                ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-                : NSFont.systemFont(ofSize: size, weight: weight)
-            let attr = NSMutableAttributedString(
-                string: text,
-                attributes: [.font: font, .foregroundColor: color]
-            )
-            attr.append(NSAttributedString(
-                string: " \(suffix)",
-                attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
-            ))
-            label.attributedStringValue = attr
-        }
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        row.addArrangedSubview(label)
-        return row
-    }
-
     private func makeLabel(
         _ text: String,
         size: CGFloat,
@@ -680,20 +606,6 @@ class OverlayPanel {
     }
 
     // MARK: - Color & icon
-
-    /// Color-code the operation line by request kind:
-    ///   - verified op:   green
-    ///   - unverified op: orange (warning)
-    ///   - ssh / git:     blue
-    ///   - unknown:       default label
-    private func operationColor(kind: RequestKind) -> NSColor {
-        switch kind {
-        case .onePasswordCLI: return .systemGreen
-        case .unverifiedOp:   return .systemOrange
-        case .ssh:            return .systemBlue
-        case .unknown:        return .labelColor
-        }
-    }
 
     /// Compose the shortcuts label content from `parts.suffix` (cmux's
     /// " ⌘N ⌃M") and `parts.shortcut` (iTerm's "⌘3" or "window 2 ⌘1").
