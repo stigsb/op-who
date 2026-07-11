@@ -324,21 +324,7 @@ public func describeOpInvocation(argv: [String]) -> String? {
 public func describeGitInvocation(argv: [String]) -> String? {
     guard !argv.isEmpty,
           (argv[0] as NSString).lastPathComponent == "git" else { return nil }
-
-    var i = 1
-    while i < argv.count {
-        let a = argv[i]
-        if a == "-C" || a == "-c" || a == "--git-dir" || a == "--work-tree" || a == "--namespace" {
-            i += 2  // flag with value
-            continue
-        }
-        if a.hasPrefix("-") {
-            i += 1
-            continue
-        }
-        return a
-    }
-    return nil
+    return parseSubcommand(argv: argv)
 }
 
 /// Git subcommands that may need network access — and therefore may trigger
@@ -393,8 +379,6 @@ public func previewTitle(rule: RequestRule, recent: RecentRequest) -> String? {
 // (see `RequestRule.swift`). Everything below is contextual labelling that
 // runs whether the matched rule replaces the actor or not.
 
-private let shellNames: Set<String> = ["bash", "zsh", "fish", "sh", "tcsh", "ksh", "dash"]
-
 private func describeActor(
     chain: [ProcessNode],
     tabTitle: String?,
@@ -426,7 +410,7 @@ private func describeActor(
         }
         return "Terminal tab ‘\(title)’"
     }
-    if let shell = chain.first(where: { shellNames.contains($0.name) }) {
+    if let shell = chain.first(where: { shellProcessNames.contains($0.name) }) {
         return "Your \(shell.name) shell"
     }
     if let term = humanTerminalName(bundleID: terminalBundleID) {
@@ -450,7 +434,7 @@ private func describeActor(
 private func looksGeneric(tabTitle: String) -> Bool {
     let trimmed = tabTitle.trimmingCharacters(in: .whitespaces)
     if trimmed.isEmpty { return true }
-    if shellNames.contains(trimmed) { return true }
+    if shellProcessNames.contains(trimmed) { return true }
     if trimmed.contains("@") && trimmed.range(of: " ") == nil { return true }
     if trimmed.contains("@") && trimmed.contains(": ") { return true }
     if isItemPlaceholder(trimmed) { return true }

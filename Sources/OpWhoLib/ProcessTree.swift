@@ -101,19 +101,6 @@ public enum ProcessTree {
         return nil
     }
 
-    /// Find all running processes named "op".
-    public static func findOpProcesses() -> [ProcessNode] {
-        return allProcesses()
-            .filter { $0.name == "op" }
-            .map(verifiedOpNode)
-    }
-
-    /// Find running processes that are likely SSH agent clients.
-    public static func findSSHAgentClients() -> [ProcessNode] {
-        let sshCommands: Set<String> = ["ssh", "git", "scp", "sftp", "rsync"]
-        return allProcesses().filter { sshCommands.contains($0.name) }
-    }
-
     /// Find all trigger processes (op + SSH clients + SSH signers) in a single
     /// process scan. Does NOT perform signature verification — that is deferred
     /// to chain building so it doesn't block initial detection.
@@ -419,9 +406,11 @@ public enum ProcessTree {
         return nil
     }
 
+    private static let homeDirectoryPath = FileManager.default.homeDirectoryForCurrentUser.path
+
     /// Tidy a path for display: replace $HOME with ~.
     public static func tidyPath(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = homeDirectoryPath
         if path == home {
             return "~"
         }
@@ -475,19 +464,26 @@ public enum ProcessTree {
         return String(bytes: pathBytes, encoding: .utf8)
     }
 
-    private static func processArguments(pid: pid_t) -> String {
+    /// Fetch the raw KERN_PROCARGS2 buffer for a process, or nil if unavailable.
+    /// Format: `[argc:int32][exec_path\0...padding\0][argv...\0][envp...\0]`.
+    private static func rawProcargs2(pid: pid_t) -> [UInt8]? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var size: Int = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return "" }
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return nil }
 
         var buffer = [UInt8](repeating: 0, count: size)
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return "" }
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+        return buffer
+    }
+
+    private static func processArguments(pid: pid_t) -> String {
+        guard let buffer = rawProcargs2(pid: pid) else { return "" }
 
         // KERN_PROCARGS2 format: argc (int32), then exec path, then NUL-padded args.
         // Cap at ARG_MAX (the OS-wide argv+env ceiling) so the conversion never
         // runs away on a pathological process; sysctl can't return more than
         // that anyway, so in practice this just uses the full buffer.
-        return String(decoding: buffer.prefix(min(size, Int(ARG_MAX))), as: UTF8.self)
+        return String(decoding: buffer.prefix(min(buffer.count, Int(ARG_MAX))), as: UTF8.self)
     }
 
     /// Return the full argv of a running process, or [] if unavailable.
@@ -495,12 +491,7 @@ public enum ProcessTree {
     /// Parses KERN_PROCARGS2 directly: `[argc:int32][exec_path\0...padding\0][argv[0]\0argv[1]\0...]`.
     /// Stops at argc strings so we don't bleed into the env block.
     public static func processArgv(pid: pid_t) -> [String] {
-        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
-        var size: Int = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return [] }
-
-        var buffer = [UInt8](repeating: 0, count: size)
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        guard let buffer = rawProcargs2(pid: pid), buffer.count > 4 else { return [] }
         return parseArgv(rawProcargs2: buffer)
     }
 
@@ -510,12 +501,7 @@ public enum ProcessTree {
     /// secrets, tokens, and PATHs that have no business in an overlay. The
     /// caller supplies the exact set of names it wants extracted.
     public static func processEnvironment(pid: pid_t, names: Set<String>) -> [String: String] {
-        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
-        var size: Int = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return [:] }
-
-        var buffer = [UInt8](repeating: 0, count: size)
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [:] }
+        guard let buffer = rawProcargs2(pid: pid), buffer.count > 4 else { return [:] }
         return parseEnvironment(rawProcargs2: buffer, names: names)
     }
 
@@ -607,19 +593,26 @@ public enum ProcessTree {
         let attributes = [kSecGuestAttributePid: pid] as CFDictionary
         var code: SecCode?
         guard SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code) == errSecSuccess,
-              let code = code else {
+              let code = code,
+              let requirement = makeOnePasswordRequirement() else {
             return false
         }
+        return SecCodeCheckValidity(code, SecCSFlags(), requirement) == errSecSuccess
+    }
+
+    /// Build the pinned-Team-ID `SecRequirement` for 1Password. One place so the
+    /// requirement text and error handling live once for both the running-code
+    /// and static-code checks.
+    private static func makeOnePasswordRequirement() -> SecRequirement? {
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(
             onePasswordRequirementText as CFString,
             SecCSFlags(),
             &requirement
-        ) == errSecSuccess,
-              let requirement = requirement else {
-            return false
+        ) == errSecSuccess else {
+            return nil
         }
-        return SecCodeCheckValidity(code, SecCSFlags(), requirement) == errSecSuccess
+        return requirement
     }
 
     /// Static-code check against 1Password's Team ID — used when
@@ -629,16 +622,8 @@ public enum ProcessTree {
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath() as CFURL
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(url, SecCSFlags(), &staticCode) == errSecSuccess,
-              let staticCode = staticCode else {
-            return false
-        }
-        var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(
-            onePasswordRequirementText as CFString,
-            SecCSFlags(),
-            &requirement
-        ) == errSecSuccess,
-              let requirement = requirement else {
+              let staticCode = staticCode,
+              let requirement = makeOnePasswordRequirement() else {
             return false
         }
         return SecStaticCodeCheckValidity(staticCode, SecCSFlags(), requirement) == errSecSuccess
