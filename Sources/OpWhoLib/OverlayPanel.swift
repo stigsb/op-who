@@ -206,7 +206,10 @@ class OverlayPanel {
         terminalRow.translatesAutoresizingMaskIntoConstraints = false
         terminalRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
         terminalRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
-        stack.addArrangedSubview(makeBodyTable(entry))
+        let bodyTable = makeBodyTable(entry)
+        stack.addArrangedSubview(bodyTable)
+        // Sit the table directly under the terminal row — no blank gap.
+        stack.setCustomSpacing(0, after: terminalRow)
 
         // Technical detail block: hidden by default. Toggled by a small
         // disclosure button so a curious user can drop down chain/pid/argv.
@@ -265,19 +268,30 @@ class OverlayPanel {
     /// Render the ordered `bodyRows` as an aligned two-column grid: dim labels
     /// in a fixed first column, values in the second. The action row spans with
     /// no label; the "asked" row wraps.
-    private func makeBodyTable(_ entry: ProcessEntry) -> NSView {
+    ///
+    /// Internal (not private) so a regression test can exercise the AppKit
+    /// grid construction directly — an earlier version indexed `column(at: 0)`
+    /// on an empty `NSGridView`, which throws NSRangeException at runtime.
+    func makeBodyTable(_ entry: ProcessEntry) -> NSView {
         let rows = bodyRows(entry: entry, dense: densePopup)
-        let grid = NSGridView()
+        // Build the whole cell matrix up front and hand it to
+        // NSGridView(views:), which creates the rows AND columns in one shot.
+        // A bare `NSGridView()` has zero columns until a row is added, so
+        // touching `column(at: 0)` before that throws NSRangeException.
+        let cells: [[NSView]] = rows.map { row in
+            [
+                makeLabel(
+                    row.label ?? "", size: 11, weight: .regular,
+                    color: OverlayColors.dimLabel, mono: true
+                ),
+                makeBodyValueLabel(row),
+            ]
+        }
+        let grid = NSGridView(views: cells)
         grid.rowSpacing = 3
         grid.columnSpacing = 10
-        grid.column(at: 0).xPlacement = .leading
-
-        for row in rows {
-            let labelView = makeLabel(
-                row.label ?? "", size: 11, weight: .regular, color: OverlayColors.dimLabel, mono: true
-            )
-            let valueView = makeBodyValueLabel(row)
-            grid.addRow(with: [labelView, valueView])
+        if grid.numberOfColumns > 0 {
+            grid.column(at: 0).xPlacement = .leading
         }
         return grid
     }
