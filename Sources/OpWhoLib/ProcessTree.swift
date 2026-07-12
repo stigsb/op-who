@@ -259,6 +259,13 @@ public enum ProcessTree {
 
             if isShell, shellFlagIsInlineCommand(a) {
                 let snippet = i + 1 < argv.count ? argv[i + 1] : ""
+                if let inner = claudeWrapperCommand(snippet) {
+                    return ScriptInfo(
+                        interpreter: interpreter,
+                        scriptName: truncateSnippet(redactString(inner)),
+                        scriptPath: nil
+                    )
+                }
                 return ScriptInfo(
                     interpreter: interpreter,
                     scriptName: "-c " + truncateSnippet(redactString(snippet)),
@@ -320,6 +327,39 @@ public enum ProcessTree {
 
     private static let shellInterpreterNames: Set<String> =
         ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
+
+    /// Claude Code's Bash tool wraps every command in a shell-snapshot
+    /// preamble:
+    ///
+    ///     source ~/.claude/shell-snapshots/snapshot-bash-….sh … && eval '<cmd>' < /dev/null && pwd -P >| /tmp/…
+    ///
+    /// Showing the raw `-c` snippet truncates to pure boilerplate
+    /// ("-c source /Users/…/shell-snapsho…"), so recognize the shape and
+    /// return the eval'd command instead. A single quote inside the command
+    /// is encoded as `'\''`; unwrap those while scanning for the closing
+    /// quote. Returns nil for anything that doesn't match, including a
+    /// wrapper with no eval or an unterminated quote.
+    static func claudeWrapperCommand(_ snippet: String) -> String? {
+        guard snippet.hasPrefix("source "),
+              snippet.contains("/.claude/shell-snapshots/"),
+              let evalRange = snippet.range(of: "eval '")
+        else { return nil }
+
+        var command = ""
+        var rest = snippet[evalRange.upperBound...]
+        while let quote = rest.firstIndex(of: "'") {
+            command += rest[..<quote]
+            let after = rest.index(after: quote)
+            if rest[after...].hasPrefix("\\''") {
+                command += "'"
+                rest = rest[rest.index(after, offsetBy: 3)...]
+            } else {
+                let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+        }
+        return nil
+    }
 
     /// True for short flag bundles whose semantics include `-c`
     /// (`-c`, `-lc`, `-ic`, `-cl`, …). Long flags (`--foo`) are out.

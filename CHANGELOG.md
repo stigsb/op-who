@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added: Popup style settings — font pickers, text size, and per-role light/dark color overrides with live preview.
+- Added: Color settings show live WCAG contrast badges; clicking a failing badge snaps to the nearest passing color.
+- Added: Whole PEM blocks (private keys and certificates) are redacted.
+- Changed: Settings window is reorganized into tabs (General / Appearance / Rules).
+- Changed: Popups triggered from Claude Code show the actual command instead of truncated shell-snapshot boilerplate.
+- Changed: Overlong argv arguments are truncated so a pasted blob can't dominate the popup.
+- Fixed: Popup content no longer stretches to fill surplus panel height.
+
 ## [0.11.0] - 2026-07-11
 
 - Added: Popup layout and formatting cleanup

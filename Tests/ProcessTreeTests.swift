@@ -286,6 +286,50 @@ struct DetectScriptTests {
         #expect(info == nil)
     }
 
+    @Test func claudeCodeWrapperExtractsEvalCommand() {
+        // Claude Code's Bash tool wraps every command in a shell-snapshot
+        // preamble; the overlay should show the eval'd command, not the
+        // boilerplate.
+        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1783893997809-xg1czc.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && eval 'op run --env-file=.env -- fleetctl get config' < /dev/null && pwd -P >| /tmp/claude-aa71-cwd"
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", snippet]
+        )
+        #expect(info?.scriptName == "op run --env-file=.env -- fleetctl get c…")
+        #expect(info?.scriptPath == nil)
+    }
+
+    @Test func claudeCodeWrapperUnescapesEmbeddedQuotes() {
+        // A single quote inside the eval'd command arrives as '\'' in the
+        // wrapper string.
+        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'echo '\\''hi'\\''' < /dev/null && pwd -P >| /tmp/c"
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", snippet]
+        )
+        #expect(info?.scriptName == "echo 'hi'")
+    }
+
+    @Test func claudeCodeWrapperWithoutEvalFallsBack() {
+        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh && pwd"
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", snippet]
+        )
+        #expect(info?.scriptName == "-c source /Users/x/.claude/shell-snapshots/…")
+    }
+
+    @Test func nonClaudeSourceSnippetFallsBack() {
+        // A plain `source x && eval y` with no shell-snapshots path is not
+        // the Claude Code wrapper.
+        let snippet = "source .env && eval 'op signin'"
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", snippet]
+        )
+        #expect(info?.scriptName == "-c source .env && eval 'op signin'")
+    }
+
     @Test func rubyPositional() {
         let info = ProcessTree.detectScript(
             interpreter: "ruby",
