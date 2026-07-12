@@ -207,6 +207,11 @@ public class OverlayPanel {
         p.level = .popUpMenu
         p.isFloatingPanel = true
         p.hidesOnDeactivate = false
+        // A programmatically created NSPanel defaults to releasing itself when
+        // its close button is clicked. The Settings "Preview" reuses/re-shows
+        // the panel, so a released-then-reordered panel would be a
+        // use-after-free — keep it alive and let `dismiss()` own its lifetime.
+        p.isReleasedWhenClosed = false
         p.titlebarAppearsTransparent = true
         p.titleVisibility = .hidden
         p.isMovableByWindowBackground = true
