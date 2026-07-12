@@ -222,6 +222,8 @@ final class AppearancePane: NSObject {
     /// ratio vs. the popup background in the edited variant's appearance;
     /// enabled (clickable) only when failing — click snaps to the nearest
     /// passing color. Guide, don't block: failing colors stay selectable.
+    /// Call after `makeColorWell(for:)` — the initial refresh reads
+    /// `colorWells[role]`.
     private func makeBadge(for role: PopupColorRole) -> NSButton {
         let badge = NSButton(title: "", target: self, action: #selector(badgeClicked(_:)))
         badge.isBordered = false
