@@ -233,7 +233,12 @@ final class AppearancePane: NSObject {
         badge.tag = colorTag(for: role)
         badge.toolTip = "WCAG contrast vs. the popup background. "
             + "Click a failing badge to snap to the nearest passing color."
-        badge.setContentHuggingPriority(.required, for: .horizontal)
+        // Fixed width + right alignment: scores vary in width ("7.4 ✓" vs
+        // "10.0 ✓"), which would otherwise make cell widths ragged and knock
+        // the following columns out of alignment.
+        badge.alignment = .right
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.widthAnchor.constraint(equalToConstant: 44).isActive = true
         colorBadges[role] = badge
         refreshBadge(for: role)
         return badge
