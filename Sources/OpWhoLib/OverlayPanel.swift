@@ -125,7 +125,7 @@ public class OverlayPanel {
         shownAt = Date()
         elapsedLabels.removeAll()
         let contentView = buildContentView(entries: entries)
-        panel.contentView = contentView
+        panel.contentView = wrapInOpaqueBackground(contentView)
         refreshElapsed()
         startElapsedTimer()
 
@@ -219,6 +219,34 @@ public class OverlayPanel {
         p.hasShadow = true
 
         return p
+    }
+
+    /// A titled window draws `backgroundColor` only below the titlebar; with
+    /// `titlebarAppearsTransparent` the titlebar strip (including the rounded
+    /// top corners) is left to AppKit's translucent behind-window backdrop,
+    /// so whatever sits under the popup ghosts through the top edge. Since
+    /// `.fullSizeContentView` extends the content view under the titlebar,
+    /// wrapping the content in a view that paints `windowBackgroundColor`
+    /// makes every pixel of the popup opaque — which is also the background
+    /// the WCAG contrast audit in OverlayColors assumes.
+    private func wrapInOpaqueBackground(_ content: NSView) -> NSView {
+        let background = OpaqueBackgroundView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            content.topAnchor.constraint(equalTo: background.topAnchor),
+            content.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+        ])
+        return background
+    }
+
+    private final class OpaqueBackgroundView: NSView {
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.windowBackgroundColor.setFill()
+            dirtyRect.fill()
+        }
     }
 
     /// Internal (not private) so a regression test can exercise the AppKit
