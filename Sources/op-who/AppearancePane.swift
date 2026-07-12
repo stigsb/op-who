@@ -261,10 +261,12 @@ final class AppearancePane: NSObject {
         previewPanel = nil
     }
 
-    /// Called by the window controller when Settings closes, so a stray
-    /// preview panel doesn't linger.
+    /// Called by the window controller when Settings closes, so neither a
+    /// stray preview panel nor an active color well's floating color panel
+    /// lingers after the window is gone.
     func dismissPreview() {
         previewPanel?.dismiss()
         previewPanel = nil
+        colorWells.values.forEach { $0.deactivate() }
     }
 }

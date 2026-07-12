@@ -1,22 +1,23 @@
 import AppKit
 import OpWhoLib
 
-/// Single-pane Settings window. Replaces the tabbed layout with a vertical
-/// stack of sections (Options, Rules) hosted inside an NSScrollView so the
-/// content can grow without resizing the window. The "Run on startup"
-/// toggle from the old General tab lives inline in the Options section;
-/// the Rules section embeds `RulesPane`'s unified user-+-built-in table.
-final class ConfigWindowController: NSWindowController {
+/// Tabbed Settings window: General / Appearance / Rules. Each tab hosts one
+/// pane's `view`; the Appearance tab is wrapped in an NSScrollView since its
+/// content (fonts + a color grid) can exceed the window height on smaller
+/// displays.
+final class ConfigWindowController: NSWindowController, NSWindowDelegate {
 
     private let generalPane: GeneralPane
+    private let appearancePane: AppearancePane
     private let rulesPane: RulesPane
-    private var scrollView: NSScrollView?
+    private var appearanceScroll: NSScrollView?
 
     init(
         ruleStore: RequestRuleStore,
         recentStore: RecentRequestsStore
     ) {
         self.generalPane = GeneralPane()
+        self.appearancePane = AppearancePane()
         self.rulesPane = RulesPane(store: ruleStore, recentStore: recentStore)
 
         let window = ConfigWindow(
@@ -30,8 +31,8 @@ final class ConfigWindowController: NSWindowController {
         super.init(window: window)
 
         rulesPane.presenter = window
-
-        window.contentView = makeContentView()
+        window.delegate = self
+        window.contentView = makeTabView()
         window.center()
     }
 
@@ -40,17 +41,72 @@ final class ConfigWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         generalPane.refreshState()
         super.showWindow(sender)
-        resetScrollToTop()
+        resetAppearanceScroll()
     }
 
-    /// The Settings window controller is retained and reused, so NSScrollView
-    /// keeps its prior scroll offset — which hides the topmost options on
-    /// reopen. Snap the document view back to the top every time.
-    private func resetScrollToTop() {
-        guard let scroll = scrollView, let doc = scroll.documentView else { return }
+    /// Dismiss any lingering popup preview when Settings closes.
+    func windowWillClose(_ notification: Notification) {
+        appearancePane.dismissPreview()
+    }
+
+    private func makeTabView() -> NSView {
+        let tabView = NSTabView()
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+
+        tabView.addTabViewItem(tab("General", fill(generalPane.view)))
+
+        let appearanceScroll = wrapInScroll(appearancePane.view)
+        self.appearanceScroll = appearanceScroll
+        tabView.addTabViewItem(tab("Appearance", appearanceScroll))
+
+        tabView.addTabViewItem(tab("Rules", fill(rulesPane.view)))
+
+        return tabView
+    }
+
+    private func tab(_ label: String, _ view: NSView) -> NSTabViewItem {
+        let item = NSTabViewItem(identifier: label)
+        item.label = label
+        item.view = view
+        return item
+    }
+
+    /// A plain container that lets its single child fill it.
+    private func fill(_ content: NSView) -> NSView {
+        let container = NSView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        return container
+    }
+
+    private func wrapInScroll(_ content: NSView) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.documentView = content
+        content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            content.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+        ])
+        return scroll
+    }
+
+    /// The controller is retained and reused, so the Appearance scroll view
+    /// keeps its prior offset. Snap it back to the top on reopen.
+    private func resetAppearanceScroll() {
+        guard let scroll = appearanceScroll, let doc = scroll.documentView else { return }
         doc.layoutSubtreeIfNeeded()
-        // The top of the document is y=0 when the clip/doc is flipped, else the
-        // top is the max-Y corner.
         let clip = scroll.contentView
         let topY = doc.isFlipped ? 0 : max(0, doc.bounds.height - clip.bounds.height)
         clip.scroll(to: NSPoint(x: 0, y: topY))
@@ -97,57 +153,4 @@ final class ConfigWindowController: NSWindowController {
         }
     }
 
-    private func makeContentView() -> NSView {
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.distribution = .fill
-        stack.spacing = 20
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 18, bottom: 18, right: 18)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let optionsSection = makeOptionsSection()
-        optionsSection.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(optionsSection)
-
-        let divider = NSBox()
-        divider.boxType = .separator
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(divider)
-
-        let rulesView = rulesPane.view
-        rulesView.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(rulesView)
-
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.documentView = stack
-
-        // Width the inner stack to match the visible scroll-view width so
-        // child views (rule table, detail form) can stretch horizontally
-        // instead of clipping to their intrinsic size.
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            stack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            divider.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 16),
-            divider.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16),
-            rulesView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            rulesView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-        ])
-        self.scrollView = scroll
-        return scroll
-    }
-
-    /// Build the Options section header + the moved-in "Run on startup"
-    /// checkbox. The GeneralPane's `view` already lays out the header,
-    /// subhead, and checkbox; reuse it as-is so the SMAppService wiring
-    /// stays self-contained.
-    private func makeOptionsSection() -> NSView {
-        return generalPane.view
-    }
 }
