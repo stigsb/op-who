@@ -1,22 +1,33 @@
 # WCAG Contrast Guidance for Color Settings — Design
 
-**Date:** 2026-07-12
+**Date:** 2026-07-12 (revised same day to match the shipped popup-style settings)
 **Status:** Approved for planning
-**Amends:** [2026-07-12-popup-style-settings-design.md](2026-07-12-popup-style-settings-design.md)
-(color-override schema and Appearance-tab color grid; the rest of that design
-stands as written)
 
 ## Goal
 
-When the user customizes popup colors in the Appearance tab, show them live
-WCAG AA contrast feedback against the popup background and offer a one-click
-fix — without ever blocking their choice. **Guide, don't enforce.**
+When the user customizes popup colors in the Appearance tab, show live WCAG AA
+contrast feedback against the popup background and offer a one-click fix —
+without ever blocking their choice. **Guide, don't enforce.**
 
-As a prerequisite, color overrides become **per-appearance** (a light value
-and a dark value per role), replacing the single static color in the amended
-design. This is what makes AA 4.5:1 achievable at all: the popup background
-resolves to pure white in light mode and `#1E1E1E` in dark mode, and the
-compliant luminance intervals for those two backgrounds (Y ≤ 0.183 vs.
+## Context: what already exists
+
+The popup style settings shipped on main with per-appearance color overrides:
+
+- `AppSettings.popupColorOverrides` is one `[String: String]` dict keyed
+  `"<role>.<variant>"` (e.g. `"claude.light"`), value `#RRGGBB`
+  (`PopupStyle.overrideKey(_:_:)`).
+- `PopupStyle.color(_:variant:)` returns the effective **concrete** color for
+  one variant: the override if set, else the WCAG default resolved in that
+  appearance.
+- The Appearance tab shows **one well per role** with an
+  **"Editing: Light | Dark"** segmented selector (`colorVariant`); wells reload
+  on variant switch (`reloadColorWells`).
+- `OverlayColors.resolved(_:in:)` (internal) resolves a dynamic color in a
+  given appearance; `contrastRatio` is public.
+
+Per-appearance overrides are what make AA 4.5:1 achievable at all: the popup
+background resolves to pure white in light mode and ~`#1E1E1E` in dark mode,
+and the compliant luminance intervals for those two backgrounds (Y ≤ 0.183 vs.
 Y ≥ 0.233) do not intersect — no single color can pass 4.5:1 in both modes.
 
 ## Decisions (from brainstorming)
@@ -28,11 +39,11 @@ Y ≥ 0.233) do not intersect — no single color can pass 4.5:1 in both modes.
   contrast-as-input. No off-the-shelf Swift component does any of this;
   NSColorPanel/SwiftUI ColorPicker have no constraint or masking hooks.
 - **Scope: badge + snap only.** Standard `NSColorWell`s stay; guidance lives
-  next to them. No custom wheel/slider picker. (A contour-annotated custom
-  wheel was explored and parked — see Non-goals.)
-- **Per-appearance overrides, two wells per role.** Each role row shows a
-  Light well and a Dark well. Each well is validated against its own
-  background, so "current appearance" ambiguity disappears.
+  next to them. No custom wheel/slider picker.
+- **Fit the shipped UI.** Each color cell gains a badge for the variant
+  currently being edited; the badge re-evaluates when the well changes, when
+  the Light|Dark selector switches, and on restore-defaults. (The brainstorm's
+  "two wells per role" grid was superseded by the shipped Light|Dark selector.)
 - **Threshold: AA 4.5:1**, matching the existing
   `OverlayColorsContrastTests` guard on the defaults.
 
@@ -43,122 +54,75 @@ Y ≥ 0.233) do not intersect — no single color can pass 4.5:1 in both modes.
   brightness slider). Parked; the math notes below are kept for a future
   iteration.
 - No APCA / WCAG 3 scoring.
-- No validation of fonts/sizes (contrast is color-only).
+- No schema changes — the shipped `"role.variant"` key format stays.
 
 ## Architecture
 
-### 1. Schema change: per-appearance overrides (`AppSettings`)
-
-Replaces `popupColorOverrides` from the amended design:
-
-| Key                        | Type              | Default | Meaning |
-|----------------------------|-------------------|---------|---------|
-| `popupColorOverridesLight` | `[String:String]` | `[:]`   | role key → hex sRGB `#RRGGBB`, light appearance |
-| `popupColorOverridesDark`  | `[String:String]` | `[:]`   | role key → hex sRGB `#RRGGBB`, dark appearance |
-
-Absent or unparseable value ⇒ that appearance keeps its `OverlayColors`
-default for the role. No migration concerns: the single-dict key never
-shipped.
-
-### 2. `OverlayColors` refactor: expose light/dark pairs
-
-The role colors are currently pre-built dynamic `NSColor`s; the raw pair is
-inaccessible. Restructure so each role's `(light, dark)` pair is available
-(e.g. a `static func pair(for: PopupColorRole) -> (light: NSColor, dark:
-NSColor)` or stored pair constants the dynamic colors are built from). The
-public dynamic statics keep working. `dimLabel`/`brightValue` map to concrete
-resolved values per appearance (they are system colors today; resolving them
-per appearance gives the pair). This also lets the existing contrast test
-iterate pairs directly instead of resolving dynamic colors through appearance
-tricks.
-
-### 3. `PopupStyle.color(role)` composition
-
-```
-dynamic(light: lightOverride(role) ?? defaultLight(role),
-        dark:  darkOverride(role)  ?? defaultDark(role))
-```
-
-Override lookup parses the hex dict entry; invalid ⇒ nil ⇒ default, no crash.
-
-### 4. Snap function (`OpWhoLib`, alongside `contrastRatio`)
+### 1. Snap function (`Sources/OpWhoLib/ContrastSnap.swift`, new)
 
 ```swift
 /// Nearest color to `color` (same hue, then reduced saturation if needed)
 /// meeting `ratio` against `background`. Pure sRGB math, no AppKit views.
-public func snapToContrast(_ color: RGB, against background: RGB,
-                           ratio: Double = 4.5) -> RGB
+public func snapToContrast(_ color: (r: Double, g: Double, b: Double),
+                           against background: (r: Double, g: Double, b: Double),
+                           ratio: Double = 4.5) -> (r: Double, g: Double, b: Double)
 ```
 
 - Hold hue and saturation; luminance is strictly monotonic in HSB brightness,
-  so bisect brightness to the nearest crossing of the required luminance
-  bound. Target ~4.55 rather than 4.5 exactly so 8-bit quantization cannot
+  so bisect brightness to the nearest crossing of the required contrast.
+  Target ~ratio+0.06 rather than the exact ratio so 8-bit quantization cannot
   round the result back below threshold.
 - If no brightness passes at that hue/saturation (e.g. a saturated blue maxes
   out at Y = 0.072, below dark mode's 0.233 floor), progressively reduce
-  saturation and retry; S = 0 (grayscale) always reaches a passing luminance
-  against these backgrounds, so the function always returns a passing color.
+  saturation and retry; grayscale always reaches a passing luminance against
+  these backgrounds, so the function effectively always returns a passing
+  color (black/white fallback guards the theoretical empty case).
 - Already-passing input is returned unchanged (idempotent).
+- Direction choice: the passing branch (darker vs. lighter than background)
+  whose boundary is nearest in brightness; against near-white / near-black
+  backgrounds only one branch is feasible anyway.
 
-Direction choice: pick the passing branch (darker vs. lighter than
-background) whose boundary is nearest in brightness; against near-white /
-near-black backgrounds only one branch is feasible anyway.
+### 2. Per-variant background (`OverlayColors`)
 
-### 5. Appearance tab: color grid with badges
+The badge compares against the popup background **for the variant being
+edited**, not the current app appearance. Make `resolved(_:in:)` public so the
+settings pane can compute `OverlayColors.resolved(OverlayColors.background,
+in: variant.appearanceName)` — no new API surface beyond the access level.
 
-Each role row: label · **Light** `NSColorWell` + badge · **Dark**
-`NSColorWell` + badge.
+### 3. Contrast badges (`AppearancePane`)
 
-- Wells seed from the effective per-appearance value (override or default
-  variant).
-- Badge = small text field/button showing the rounded ratio and verdict
-  (`4.7 ✓` / `2.1 ✗`), computed with the existing `contrastRatio` against the
-  popup background for that column's appearance (light: white; dark:
-  `#1E1E1E` — resolved from `NSColor.windowBackgroundColor` per appearance,
-  not hardcoded).
-- A failing badge is enabled/clickable: click applies `snapToContrast` to
-  that well's color, updates the well, the override, and the badge. A passing
-  badge is inert.
-- Badges update live on every well change (`NSColorWell` action fires
-  continuously during panel dragging).
-- **Restore defaults** clears both dicts and reseeds wells and badges.
+Each `colorCell` becomes name → well → **badge**:
 
-Editing a well writes to the matching dict immediately, same
-write-on-change pattern as the rest of the pane.
+- Badge = small borderless `NSButton` showing the rounded ratio and verdict
+  (`4.7 ✓` dimmed / `2.1 ✗` orange), computed with `contrastRatio` between the
+  well's color and the popup background resolved in `colorVariant`'s
+  appearance.
+- A failing badge is enabled/clickable: click applies `snapToContrast` to the
+  well's color, updates the well, persists the override through the normal
+  `colorChanged` path, and refreshes the badge. A passing badge is inert.
+- Badges refresh on: well change (`colorChanged`), variant switch
+  (`reloadColorWells`), and restore-defaults.
+- If four cells per row overflow the window's minimum width with badges
+  added, drop to three cells per row.
 
 ## Data flow
 
 ```
-Light/Dark NSColorWell ─writes─▶ popupColorOverridesLight/Dark (AppSettings)
-        │                                        │
-        └─▶ contrastRatio(color, bg(appearance)) ─▶ badge text/state
-                     │
-        badge click ─▶ snapToContrast ─▶ well + dict + badge update
-
-PopupStyle(settings:) ─▶ dynamic(lightOverride ?? default, darkOverride ?? default)
+NSColorWell edit ─▶ colorChanged ─▶ popupColorOverrides["role.variant"] ─▶ badge refresh
+Light|Dark switch ─▶ reloadColorWells ─▶ wells + badges show that variant
+badge click (failing) ─▶ snapToContrast(well, bg(variant)) ─▶ well.color ─▶ colorChanged
 ```
 
 ## Testing
 
-All in `OpWhoLib` tests (Swift Testing), pure functions — no AppKit UI tests:
+All pure functions, no AppKit UI tests (`Tests/ContrastSnapTests.swift`):
 
-- `snapToContrast`: result meets ≥ 4.5 against both real backgrounds for a
-  sweep of input hues; hue preserved when reachable at input saturation;
-  desaturation fallback engages for saturated blue against the dark
-  background; idempotent on passing input; grayscale extremes handled.
-- `PopupStyle.color`: light-only override ⇒ dark stays default (and vice
-  versa); invalid hex in one dict ⇒ that side falls back, other side intact.
-- `AppSettings` round-trip for the two dict keys.
-- `OverlayColorsContrastTests` continues to guard the defaults, now iterating
-  the exposed pairs.
-
-## Rollout / compatibility
-
-Purely additive; ships as part of the popup-style-settings work. The
-**implementation plan `docs/superpowers/plans/2026-07-12-popup-style-settings.md`
-must be amended before execution**: single `popupColorOverrides` dict → the
-two per-appearance dicts, one well per role → two wells + badges, plus the
-new snap-function and `OverlayColors` pair-refactor tasks.
+- `snapToContrast` meets ≥ 4.5 against both real backgrounds (white,
+  `#1E1E1E`) for a sweep of input hues.
+- Hue/saturation preserved when reachable at input saturation.
+- Desaturation fallback engages for saturated blue against the dark background.
+- Idempotent on already-passing input; grayscale extremes handled.
+- Existing suites (`PopupStyleTests`, `OverlayColorsContrastTests`) unchanged.
 
 ## Reference: the math (kept for a future custom picker)
 
