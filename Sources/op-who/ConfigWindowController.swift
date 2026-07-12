@@ -11,6 +11,7 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
     private let appearancePane: AppearancePane
     private let rulesPane: RulesPane
     private var appearanceScroll: NSScrollView?
+    private var tabView: NSTabView?
 
     init(
         ruleStore: RequestRuleStore,
@@ -40,6 +41,9 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
 
     override func showWindow(_ sender: Any?) {
         generalPane.refreshState()
+        // The controller is retained and reused, so the tab view would keep
+        // the last active pane. Always open on General.
+        tabView?.selectTabViewItem(at: 0)
         super.showWindow(sender)
         resetAppearanceScroll()
     }
@@ -51,6 +55,7 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
 
     private func makeTabView() -> NSView {
         let tabView = NSTabView()
+        self.tabView = tabView
         tabView.translatesAutoresizingMaskIntoConstraints = false
 
         tabView.addTabViewItem(tab("General", fill(generalPane.view)))

@@ -162,14 +162,16 @@ final class AppearancePane: NSObject {
         return column
     }
 
-    /// One `name → pill` cell with a fixed-width label so pills column-align.
+    /// One `pill → name → badge` cell: the pill leads so each label reads as
+    /// belonging to the color on its left; the fixed-width name keeps the
+    /// columns aligned.
     private func colorCell(for role: PopupColorRole) -> NSView {
         let name = NSTextField(labelWithString: role.rawValue)
         name.font = NSFont.systemFont(ofSize: 11)
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.widthAnchor.constraint(equalToConstant: 86).isActive = true
-        let cell = NSStackView(views: [name, makeColorWell(for: role), makeBadge(for: role)])
+        let cell = NSStackView(views: [makeColorWell(for: role), name, makeBadge(for: role)])
         cell.orientation = .horizontal
         cell.alignment = .centerY
         cell.spacing = 6
