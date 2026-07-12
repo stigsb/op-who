@@ -427,7 +427,9 @@ public class OnePasswordWatcher {
         if overlayPanel == nil {
             overlayPanel = OverlayPanel()
         }
-        overlayPanel?.densePopup = AppSettings().densePopup
+        let settings = AppSettings()
+        overlayPanel?.densePopup = settings.densePopup
+        overlayPanel?.style = PopupStyle(settings: settings)
         overlayPanel?.show(entries: entries, near: windowFrame)
     }
 

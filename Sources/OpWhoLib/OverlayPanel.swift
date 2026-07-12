@@ -57,6 +57,42 @@ class OverlayPanel {
         var gitContext: GitContext? = nil
     }
 
+    /// A representative entry used by the Settings "Preview" button so fonts
+    /// and colors can be judged without waiting for a real 1Password prompt.
+    public static func sampleEntry() -> ProcessEntry {
+        ProcessEntry(
+            pid: 4242,
+            chain: [
+                ProcessNode(pid: 4242, ppid: 4200, name: "op", tty: "/dev/ttys003",
+                            executablePath: "/opt/homebrew/bin/op", isVerifiedOnePasswordCLI: true),
+                ProcessNode(pid: 4200, ppid: 4100, name: "node", tty: "/dev/ttys003",
+                            executablePath: nil, isVerifiedOnePasswordCLI: false),
+                ProcessNode(pid: 4100, ppid: 1, name: "zsh", tty: "/dev/ttys003",
+                            executablePath: nil, isVerifiedOnePasswordCLI: false),
+            ],
+            triggerArgv: ["op", "read", "op://vault/item/password"],
+            tty: "/dev/ttys003",
+            tabTitle: "op-who",
+            tabShortcut: nil,
+            claudeSession: "preview",
+            claudeContext: nil,
+            scriptInfo: nil,
+            terminalBundleID: "com.googlecode.iterm2",
+            terminalPID: 4000,
+            cwd: "~/git/stigsb/op-who",
+            triggerCwd: "~/git/stigsb/op-who",
+            cmuxWorkspaceID: nil,
+            cmuxTabID: nil,
+            cmuxSurface: nil,
+            pluginUpdate: nil,
+            summary: RequestSummary(kind: .onePasswordCLI, title: "Preview", subtitle: nil, isWarning: false),
+            matchedRuleID: nil,
+            matchedRuleName: nil,
+            matchedBuiltInID: nil,
+            gitContext: GitContext(root: "~/git/stigsb/op-who", branch: "main", worktreeSubpath: nil)
+        )
+    }
+
     private var panel: NSPanel?
 
     /// Trailing time labels updated every second by `elapsedTimer`.
