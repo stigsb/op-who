@@ -44,3 +44,43 @@ struct PopupStyleColorTests {
         #expect(NSColor(popupHex: "#12345") == nil)   // wrong length
     }
 }
+
+@Suite("PopupStyle fonts")
+struct PopupStyleFontTests {
+    @Test("default base 12 yields 11/12/13 tiers")
+    func defaultTiers() {
+        let s = PopupStyle.default
+        #expect(s.font(.ui, weight: .regular, tier: .small).pointSize == 11)
+        #expect(s.font(.ui, weight: .regular, tier: .base).pointSize == 12)
+        #expect(s.font(.ui, weight: .regular, tier: .large).pointSize == 13)
+    }
+
+    @Test("custom base size shifts every tier")
+    func customBase() {
+        let s = PopupStyle(uiFontName: nil, monoFontName: nil, baseSize: 16, overrides: [:])
+        #expect(s.font(.mono, weight: .regular, tier: .small).pointSize == 15)
+        #expect(s.font(.mono, weight: .regular, tier: .base).pointSize == 16)
+        #expect(s.font(.mono, weight: .regular, tier: .large).pointSize == 17)
+    }
+
+    @Test("system default mono role is monospaced")
+    func systemMonoIsFixedPitch() {
+        let f = PopupStyle.default.font(.mono, weight: .regular, tier: .base)
+        #expect(f.isFixedPitch)
+    }
+
+    @Test("unknown family name falls back to a system font of the right size")
+    func unknownFamilyFallsBack() {
+        let s = PopupStyle(uiFontName: "No Such Font XYZ", monoFontName: nil, baseSize: 12, overrides: [:])
+        let f = s.font(.ui, weight: .semibold, tier: .large)
+        #expect(f.pointSize == 13)   // still sized correctly
+    }
+
+    @Test("a real custom family is honored")
+    func customFamilyHonored() {
+        let s = PopupStyle(uiFontName: "Menlo", monoFontName: nil, baseSize: 12, overrides: [:])
+        let f = s.font(.ui, weight: .regular, tier: .base)
+        #expect(f.familyName == "Menlo")
+        #expect(f.pointSize == 12)
+    }
+}
