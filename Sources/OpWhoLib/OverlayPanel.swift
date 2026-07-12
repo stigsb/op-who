@@ -1,8 +1,8 @@
 import AppKit
 
-class OverlayPanel {
+public class OverlayPanel {
 
-    struct ProcessEntry {
+    public struct ProcessEntry {
         let pid: pid_t
         let chain: [ProcessNode]
         let triggerArgv: [String]
@@ -57,6 +57,8 @@ class OverlayPanel {
         var gitContext: GitContext? = nil
     }
 
+    public init() {}
+
     /// A representative entry used by the Settings "Preview" button so fonts
     /// and colors can be judged without waiting for a real 1Password prompt.
     public static func sampleEntry() -> ProcessEntry {
@@ -100,11 +102,11 @@ class OverlayPanel {
     private var elapsedTimer: Timer?
 
     /// When true, droppable rows collapse (see AppSettings.densePopup).
-    var densePopup: Bool = false
+    public var densePopup: Bool = false
 
     /// Resolves popup fonts and colors from user settings. Defaults to the
     /// historical appearance; set before `show` (see OnePasswordWatcher).
-    var style: PopupStyle = .default
+    public var style: PopupStyle = .default
 
     /// When the overlay was shown. The elapsed-time column counts up from
     /// here — it measures how long the *approval* has been pending, not how
@@ -112,7 +114,7 @@ class OverlayPanel {
     /// would otherwise start the timer at its full age instead of 0).
     private var shownAt: Date = .distantPast
 
-    func show(entries: [ProcessEntry], near windowFrame: CGRect?) {
+    public func show(entries: [ProcessEntry], near windowFrame: CGRect?) {
 
         let panel = makePanel()
         self.panel = panel
@@ -161,7 +163,7 @@ class OverlayPanel {
         panel.orderFrontRegardless()
     }
 
-    func dismiss() {
+    public func dismiss() {
         panel?.orderOut(nil)
         panel = nil
         elapsedTimer?.invalidate()
