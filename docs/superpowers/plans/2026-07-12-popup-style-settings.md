@@ -2,27 +2,33 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let the user configure the approval popup's fonts, font size, and per-role colors from a new tabbed Settings window, defaulting to today's WCAG palette and system fonts.
+**Goal:** Let the user configure the approval popup's fonts, font size, and per-role colors (with per-appearance light/dark values and live WCAG contrast guidance) from a new tabbed Settings window, defaulting to today's WCAG palette and system fonts.
 
-**Architecture:** A pure `PopupStyle` resolver turns an `AppSettings` snapshot into concrete `NSFont`/`NSColor`, so `OverlayPanel` stops hardcoding sizes and default colors. `OverlayColors` stays the home of the default values (and its contrast test). The Settings window becomes an `NSTabView` with General / Appearance / Rules tabs; all visual settings live in the new `AppearancePane`.
+**Architecture:** A pure `PopupStyle` resolver turns an `AppSettings` snapshot into concrete `NSFont`/`NSColor`, so `OverlayPanel` stops hardcoding sizes and default colors. Color overrides are **per-appearance** (a light and a dark hex per role); `OverlayColors` stays the home of the default values (and its contrast test) and newly exposes its raw light/dark pairs. The Settings window becomes an `NSTabView` with General / Appearance / Rules tabs; all visual settings live in the new `AppearancePane`, where each color well carries a live WCAG AA contrast badge with click-to-snap (guide, don't block).
 
 **Tech Stack:** Swift, AppKit, Swift Testing, UserDefaults-backed `AppSettings`.
 
-**Spec:** `docs/superpowers/specs/2026-07-12-popup-style-settings-design.md`
+**Specs:**
+- `docs/superpowers/specs/2026-07-12-popup-style-settings-design.md`
+- `docs/superpowers/specs/2026-07-12-wcag-contrast-guidance-design.md` (amends the first: per-appearance overrides, badges + snap)
 
 ---
 
 ## File Structure
 
-- **Modify** `Sources/OpWhoLib/AppSettings.swift` — four new keys (`popupUIFontName`, `popupMonoFontName`, `popupFontBaseSize`, `popupColorOverrides`).
+- **Modify** `Sources/OpWhoLib/AppSettings.swift` — five new keys (`popupUIFontName`, `popupMonoFontName`, `popupFontBaseSize`, `popupColorOverridesLight`, `popupColorOverridesDark`).
+- **Modify** `Sources/OpWhoLib/OverlayColors.swift` — expose the `(light, dark)` pair behind each role plus `backgroundPair` and a public `resolved(_:dark:)` helper.
 - **Create** `Sources/OpWhoLib/PopupStyle.swift` — `PopupColorRole`, `FontRole`, `FontTier`, the `PopupStyle` resolver, and the `NSColor(popupHex:)` / `popupHexString` helpers.
+- **Create** `Sources/OpWhoLib/ContrastSnap.swift` — `snapToContrast` and the HSB conversion helpers.
 - **Modify** `Sources/OpWhoLib/OverlayPanel.swift` — add a `style` property, route `makeLabel` and the color helpers through it, add `static func sampleEntry()`.
 - **Modify** `Sources/OpWhoLib/OnePasswordWatcher.swift` — set `overlayPanel.style` before `show` (near line 430).
 - **Modify** `Sources/op-who/GeneralPane.swift` — shed dense-popup + appearance controls; keep only "Run on startup".
-- **Create** `Sources/op-who/AppearancePane.swift` — the new Appearance tab (dense, light/dark, fonts, size, colors, restore, preview).
+- **Create** `Sources/op-who/AppearancePane.swift` — the new Appearance tab (dense, light/dark, fonts, size, Light+Dark color wells with contrast badges, restore, preview).
 - **Modify** `Sources/op-who/ConfigWindowController.swift` — replace the single scroll column with an `NSTabView`.
-- **Modify** `Tests/AppSettingsTests.swift` — cover the four new keys.
+- **Modify** `Tests/AppSettingsTests.swift` — cover the five new keys.
 - **Create** `Tests/PopupStyleTests.swift` — cover color/font/size resolution.
+- **Create** `Tests/ContrastSnapTests.swift` — cover `snapToContrast`.
+- **Modify** `Tests/OverlayColorsContrastTests.swift` — add a pair-consistency suite (existing contrast assertions unchanged).
 
 Test commands throughout: `swift build` and `swift test`. (If on a CommandLineTools-only toolchain, apply the `Testing.framework` symlink dance from `CLAUDE.md` first.)
 
@@ -71,12 +77,16 @@ Add to `Tests/AppSettingsTests.swift` inside the `AppSettingsTests` struct:
         #expect(AppSettings(defaults: d).popupFontBaseSize == 15)
     }
 
-    @Test("color overrides default empty and persist")
+    @Test("per-appearance color overrides default empty and persist independently")
     func popupColorOverrides() {
         let d = freshDefaults()
-        #expect(AppSettings(defaults: d).popupColorOverrides.isEmpty)
-        AppSettings(defaults: d).popupColorOverrides = ["claude": "#AABBCC"]
-        #expect(AppSettings(defaults: d).popupColorOverrides["claude"] == "#AABBCC")
+        #expect(AppSettings(defaults: d).popupColorOverridesLight.isEmpty)
+        #expect(AppSettings(defaults: d).popupColorOverridesDark.isEmpty)
+        AppSettings(defaults: d).popupColorOverridesLight = ["claude": "#AABBCC"]
+        AppSettings(defaults: d).popupColorOverridesDark = ["claude": "#112233"]
+        #expect(AppSettings(defaults: d).popupColorOverridesLight["claude"] == "#AABBCC")
+        #expect(AppSettings(defaults: d).popupColorOverridesDark["claude"] == "#112233")
+        #expect(AppSettings(defaults: d).popupColorOverridesLight["ssh"] == nil)
     }
 ```
 
@@ -93,7 +103,8 @@ In `Sources/OpWhoLib/AppSettings.swift`, add to the `Key` enum:
         static let popupUIFontName = "popupUIFontName"
         static let popupMonoFontName = "popupMonoFontName"
         static let popupFontBaseSize = "popupFontBaseSize"
-        static let popupColorOverrides = "popupColorOverrides"
+        static let popupColorOverridesLight = "popupColorOverridesLight"
+        static let popupColorOverridesDark = "popupColorOverridesDark"
 ```
 
 Add these properties after `appearance`:
@@ -121,10 +132,18 @@ Add these properties after `appearance`:
         set { defaults.set(Self.clampSize(newValue), forKey: Key.popupFontBaseSize) }
     }
 
-    /// Per-role popup color overrides: role key → "#RRGGBB". Absent ⇒ default.
-    public var popupColorOverrides: [String: String] {
-        get { (defaults.dictionary(forKey: Key.popupColorOverrides) as? [String: String]) ?? [:] }
-        set { defaults.set(newValue, forKey: Key.popupColorOverrides) }
+    /// Per-role popup color overrides for the light appearance:
+    /// role key → "#RRGGBB". Absent key ⇒ the role's default light variant.
+    public var popupColorOverridesLight: [String: String] {
+        get { (defaults.dictionary(forKey: Key.popupColorOverridesLight) as? [String: String]) ?? [:] }
+        set { defaults.set(newValue, forKey: Key.popupColorOverridesLight) }
+    }
+
+    /// Per-role popup color overrides for the dark appearance:
+    /// role key → "#RRGGBB". Absent key ⇒ the role's default dark variant.
+    public var popupColorOverridesDark: [String: String] {
+        get { (defaults.dictionary(forKey: Key.popupColorOverridesDark) as? [String: String]) ?? [:] }
+        set { defaults.set(newValue, forKey: Key.popupColorOverridesDark) }
     }
 
     private static func clampSize(_ v: Double) -> Double { min(24, max(9, v)) }
@@ -147,14 +166,200 @@ git add Sources/OpWhoLib/AppSettings.swift Tests/AppSettingsTests.swift
 git commit -F - <<'EOF'
 feat: add popup font/size/color settings keys to AppSettings
 
-Four optional/defaulted UserDefaults keys backing the upcoming popup
-style settings. Absent keys reproduce today's appearance.
+Five optional/defaulted UserDefaults keys backing the upcoming popup
+style settings. Color overrides are per-appearance (light + dark dicts).
+Absent keys reproduce today's appearance.
 EOF
 ```
 
 ---
 
-## Task 2: `PopupStyle` — color roles and resolution
+## Task 2: `OverlayColors` — expose light/dark pairs
+
+**Files:**
+- Modify: `Sources/OpWhoLib/OverlayColors.swift`
+- Test: `Tests/OverlayColorsContrastTests.swift` (new suite appended; existing contrast assertions untouched)
+
+The role colors are currently pre-built dynamic `NSColor`s; the raw `(light, dark)` pair is inaccessible. Per-appearance overrides need to fall back one side at a time, and the Appearance tab needs concrete per-appearance values to validate against — so expose the pairs.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `Tests/OverlayColorsContrastTests.swift`:
+
+```swift
+@Suite("OverlayColors pairs")
+struct OverlayColorsPairTests {
+    private func resolvedSRGB(_ c: NSColor, dark: Bool) -> (r: Double, g: Double, b: Double) {
+        OverlayColors.srgb(OverlayColors.resolved(c, dark: dark))
+    }
+
+    @Test("dynamic role colors resolve to their exposed pairs")
+    func pairsMatchDynamics() {
+        let cases: [(NSColor, (light: NSColor, dark: NSColor))] = [
+            (OverlayColors.claude, OverlayColors.claudePair),
+            (OverlayColors.editor, OverlayColors.editorPair),
+            (OverlayColors.verifiedOp, OverlayColors.verifiedOpPair),
+            (OverlayColors.unverifiedOp, OverlayColors.unverifiedOpPair),
+            (OverlayColors.ssh, OverlayColors.sshPair),
+            (OverlayColors.gitRoot, OverlayColors.gitRootPair),
+            (OverlayColors.branch, OverlayColors.branchPair),
+            (OverlayColors.worktree, OverlayColors.worktreePair),
+        ]
+        for (dyn, pair) in cases {
+            #expect(resolvedSRGB(dyn, dark: false) == OverlayColors.srgb(pair.light))
+            #expect(resolvedSRGB(dyn, dark: true) == OverlayColors.srgb(pair.dark))
+        }
+    }
+
+    @Test("system-color pairs resolve per appearance")
+    func systemPairsResolve() {
+        // dimLabel/brightValue/background come from system colors; the pair
+        // must be the concrete per-appearance resolution of the same color.
+        #expect(OverlayColors.srgb(OverlayColors.dimLabelPair.light)
+            == resolvedSRGB(OverlayColors.dimLabel, dark: false))
+        #expect(OverlayColors.srgb(OverlayColors.brightValuePair.dark)
+            == resolvedSRGB(OverlayColors.brightValue, dark: true))
+    }
+
+    @Test("background pair spans light to dark")
+    func backgroundPairOrdering() {
+        let bp = OverlayColors.backgroundPair
+        let light = OverlayColors.srgb(bp.light)
+        let dark = OverlayColors.srgb(bp.dark)
+        #expect(contrastRatio(light, dark) > 10)   // white vs ~#1E1E1E ≈ 17:1
+    }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `swift test --filter OverlayColorsPair 2>&1 | tail -20`
+Expected: FAIL — `type 'OverlayColors' has no member 'claudePair'` (etc.).
+
+- [ ] **Step 3: Restructure `OverlayColors`**
+
+Replace the body of `Sources/OpWhoLib/OverlayColors.swift`'s `OverlayColors` enum (keep the file's `contrastRatio` free function unchanged) with:
+
+```swift
+public enum OverlayColors {
+    /// The popup's window background.
+    public static let background = NSColor.windowBackgroundColor
+
+    // Concrete (light, dark) values behind each themeable role. Exposed so
+    // per-appearance overrides can fall back one side at a time and the
+    // Appearance tab can validate each side against its own background.
+    // TUNE these until the contrast test passes: darken the light value /
+    // lighten the dark value to raise ratio.
+    public static let claudePair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.42, green: 0.20, blue: 0.60, alpha: 1),
+        dark:  NSColor(srgbRed: 0.78, green: 0.60, blue: 0.98, alpha: 1))
+    public static let editorPair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.0, green: 0.42, blue: 0.45, alpha: 1),
+        dark:  NSColor(srgbRed: 0.40, green: 0.85, blue: 0.90, alpha: 1))
+    public static let verifiedOpPair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.0, green: 0.45, blue: 0.20, alpha: 1),
+        dark:  NSColor(srgbRed: 0.40, green: 0.85, blue: 0.55, alpha: 1))
+    public static let unverifiedOpPair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.62, green: 0.33, blue: 0.0, alpha: 1),
+        dark:  NSColor(srgbRed: 1.0, green: 0.70, blue: 0.30, alpha: 1))
+    public static let sshPair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.0, green: 0.35, blue: 0.80, alpha: 1),
+        dark:  NSColor(srgbRed: 0.45, green: 0.72, blue: 1.0, alpha: 1))
+
+    // Dedicated location-field colors. Each of git-root / branch / worktree
+    // keeps its own hue in a fixed row so the value can be found by color as
+    // well as position. Chosen from the palette's still-free hues (gold, rose,
+    // slate) so they don't echo the action/who row colors above them.
+    public static let gitRootPair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.56, green: 0.42, blue: 0.0, alpha: 1),
+        dark:  NSColor(srgbRed: 0.93, green: 0.77, blue: 0.33, alpha: 1))
+    public static let branchPair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.74, green: 0.14, blue: 0.44, alpha: 1),
+        dark:  NSColor(srgbRed: 1.0, green: 0.55, blue: 0.80, alpha: 1))
+    public static let worktreePair: (light: NSColor, dark: NSColor) = (
+        light: NSColor(srgbRed: 0.24, green: 0.36, blue: 0.56, alpha: 1),
+        dark:  NSColor(srgbRed: 0.62, green: 0.74, blue: 0.95, alpha: 1))
+
+    // The appearance-aware colors the popup actually renders with.
+    public static let claude = dynamic(claudePair)
+    public static let editor = dynamic(editorPair)
+    public static let verifiedOp = dynamic(verifiedOpPair)
+    public static let unverifiedOp = dynamic(unverifiedOpPair)
+    public static let ssh = dynamic(sshPair)
+    public static let gitRoot = dynamic(gitRootPair)
+    public static let branch = dynamic(branchPair)
+    public static let worktree = dynamic(worktreePair)
+
+    public static let dimLabel = NSColor.secondaryLabelColor
+    public static let brightValue = NSColor.labelColor
+
+    // System-color roles resolved to concrete per-appearance values.
+    public static var dimLabelPair: (light: NSColor, dark: NSColor) {
+        (resolved(.secondaryLabelColor, dark: false), resolved(.secondaryLabelColor, dark: true))
+    }
+    public static var brightValuePair: (light: NSColor, dark: NSColor) {
+        (resolved(.labelColor, dark: false), resolved(.labelColor, dark: true))
+    }
+    /// The popup background as concrete per-appearance values (white in
+    /// light mode, ~#1E1E1E in dark on current macOS).
+    public static var backgroundPair: (light: NSColor, dark: NSColor) {
+        (resolved(.windowBackgroundColor, dark: false), resolved(.windowBackgroundColor, dark: true))
+    }
+
+    /// Build an appearance-aware color from a light/dark pair.
+    static func dynamic(_ pair: (light: NSColor, dark: NSColor)) -> NSColor {
+        dynamic(light: pair.light, dark: pair.dark)
+    }
+
+    /// Build an appearance-aware color from a light/dark pair.
+    static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return isDark ? dark : light
+        }
+    }
+
+    /// Resolve an appearance-dependent color (dynamic or system) to its
+    /// concrete sRGB value in the given appearance.
+    public static func resolved(_ color: NSColor, dark: Bool) -> NSColor {
+        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+        var out = color
+        appearance.performAsCurrentDrawingAppearance {
+            out = color.usingColorSpace(.sRGB) ?? color
+        }
+        return out
+    }
+
+    /// Resolve `color` to sRGB components in the current drawing appearance.
+    public static func srgb(_ color: NSColor) -> (r: Double, g: Double, b: Double) {
+        let c = (color.usingColorSpace(.sRGB) ?? color)
+        return (Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent))
+    }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `swift test --filter OverlayColors 2>&1 | tail -20`
+Expected: PASS — both the new pair suite and the pre-existing contrast assertions (the dynamic colors are built from the same values as before).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Sources/OpWhoLib/OverlayColors.swift Tests/OverlayColorsContrastTests.swift
+git commit -F - <<'EOF'
+refactor: expose light/dark pairs behind OverlayColors roles
+
+The dynamic role colors are now built from public (light, dark) pair
+constants; system-color roles and the popup background gain resolved
+per-appearance pairs. Needed for per-appearance overrides and the
+contrast badges in the Appearance tab.
+EOF
+```
+
+---
+
+## Task 3: `PopupStyle` — color roles and per-appearance resolution
 
 **Files:**
 - Create: `Sources/OpWhoLib/PopupStyle.swift`
@@ -171,35 +376,50 @@ import Testing
 
 @Suite("PopupStyle colors")
 struct PopupStyleColorTests {
-    private func srgb(_ c: NSColor) -> (r: Double, g: Double, b: Double) {
-        OverlayColors.srgb(c)
+    private func resolved(_ c: NSColor, dark: Bool) -> (r: Double, g: Double, b: Double) {
+        OverlayColors.srgb(OverlayColors.resolved(c, dark: dark))
     }
 
-    @Test("no override returns the role default")
+    @Test("no override returns the role default in both appearances")
     func defaultColor() {
         let style = PopupStyle.default
         for role in PopupColorRole.allCases {
-            #expect(srgb(style.color(role)) == srgb(role.defaultColor))
+            #expect(resolved(style.color(role), dark: false) == resolved(role.defaultColor, dark: false))
+            #expect(resolved(style.color(role), dark: true) == resolved(role.defaultColor, dark: true))
         }
     }
 
-    @Test("a valid hex override wins over the default")
-    func overrideColor() {
+    @Test("a light-only override changes light and keeps the dark default")
+    func lightOnlyOverride() {
         let style = PopupStyle(
             uiFontName: nil, monoFontName: nil, baseSize: 12,
-            overrides: ["claude": "#112233"]
+            overridesLight: ["claude": "#112233"], overridesDark: [:]
         )
         let c = style.color(.claude)
-        #expect(srgb(c) == srgb(NSColor(srgbRed: 0x11/255.0, green: 0x22/255.0, blue: 0x33/255.0, alpha: 1)))
+        #expect(resolved(c, dark: false) == OverlayColors.srgb(NSColor(popupHex: "#112233")!))
+        #expect(resolved(c, dark: true) == resolved(PopupColorRole.claude.defaultPair.dark, dark: true))
     }
 
-    @Test("an invalid hex override falls back to the default")
+    @Test("a dark-only override changes dark and keeps the light default")
+    func darkOnlyOverride() {
+        let style = PopupStyle(
+            uiFontName: nil, monoFontName: nil, baseSize: 12,
+            overridesLight: [:], overridesDark: ["branch": "#445566"]
+        )
+        let c = style.color(.branch)
+        #expect(resolved(c, dark: true) == OverlayColors.srgb(NSColor(popupHex: "#445566")!))
+        #expect(resolved(c, dark: false) == resolved(PopupColorRole.branch.defaultPair.light, dark: false))
+    }
+
+    @Test("an invalid hex falls back to the default for that side only")
     func invalidOverride() {
         let style = PopupStyle(
             uiFontName: nil, monoFontName: nil, baseSize: 12,
-            overrides: ["ssh": "not-a-color"]
+            overridesLight: ["ssh": "not-a-color"], overridesDark: ["ssh": "#012345"]
         )
-        #expect(srgb(style.color(.ssh)) == srgb(PopupColorRole.ssh.defaultColor))
+        let c = style.color(.ssh)
+        #expect(resolved(c, dark: false) == resolved(PopupColorRole.ssh.defaultPair.light, dark: false))
+        #expect(resolved(c, dark: true) == OverlayColors.srgb(NSColor(popupHex: "#012345")!))
     }
 
     @Test("hex round-trips through NSColor helpers")
@@ -218,7 +438,7 @@ struct PopupStyleColorTests {
 Run: `swift test --filter PopupStyleColor 2>&1 | tail -20`
 Expected: FAIL — `cannot find 'PopupStyle' in scope`.
 
-- [ ] **Step 3: Implement `PopupStyle.swift` (colors + hex, font stub)**
+- [ ] **Step 3: Implement `PopupStyle.swift` (colors + hex, fonts)**
 
 Create `Sources/OpWhoLib/PopupStyle.swift`:
 
@@ -226,7 +446,7 @@ Create `Sources/OpWhoLib/PopupStyle.swift`:
 import AppKit
 
 /// Semantic color roles the popup renders. Raw value is the stable storage
-/// key used in `AppSettings.popupColorOverrides`.
+/// key used in `AppSettings.popupColorOverridesLight/Dark`.
 public enum PopupColorRole: String, CaseIterable {
     case claude, editor, verifiedOp, unverifiedOp, ssh
     case gitRoot, branch, worktree
@@ -245,6 +465,22 @@ public enum PopupColorRole: String, CaseIterable {
         case .worktree:     return OverlayColors.worktree
         case .dimLabel:     return OverlayColors.dimLabel
         case .brightValue:  return OverlayColors.brightValue
+        }
+    }
+
+    /// The default's concrete (light, dark) values, for per-side fallback.
+    public var defaultPair: (light: NSColor, dark: NSColor) {
+        switch self {
+        case .claude:       return OverlayColors.claudePair
+        case .editor:       return OverlayColors.editorPair
+        case .verifiedOp:   return OverlayColors.verifiedOpPair
+        case .unverifiedOp: return OverlayColors.unverifiedOpPair
+        case .ssh:          return OverlayColors.sshPair
+        case .gitRoot:      return OverlayColors.gitRootPair
+        case .branch:       return OverlayColors.branchPair
+        case .worktree:     return OverlayColors.worktreePair
+        case .dimLabel:     return OverlayColors.dimLabelPair
+        case .brightValue:  return OverlayColors.brightValuePair
         }
     }
 }
@@ -270,18 +506,22 @@ public struct PopupStyle {
     private let uiFontName: String?
     private let monoFontName: String?
     private let baseSize: CGFloat
-    private let overrides: [String: String]
+    private let overridesLight: [String: String]
+    private let overridesDark: [String: String]
 
     /// Reproduces today's appearance: system fonts, base 12, no overrides.
     public static let `default` = PopupStyle(
-        uiFontName: nil, monoFontName: nil, baseSize: 12, overrides: [:]
+        uiFontName: nil, monoFontName: nil, baseSize: 12,
+        overridesLight: [:], overridesDark: [:]
     )
 
-    public init(uiFontName: String?, monoFontName: String?, baseSize: CGFloat, overrides: [String: String]) {
+    public init(uiFontName: String?, monoFontName: String?, baseSize: CGFloat,
+                overridesLight: [String: String], overridesDark: [String: String]) {
         self.uiFontName = uiFontName
         self.monoFontName = monoFontName
         self.baseSize = baseSize
-        self.overrides = overrides
+        self.overridesLight = overridesLight
+        self.overridesDark = overridesDark
     }
 
     public init(settings: AppSettings) {
@@ -289,15 +529,19 @@ public struct PopupStyle {
             uiFontName: settings.popupUIFontName,
             monoFontName: settings.popupMonoFontName,
             baseSize: CGFloat(settings.popupFontBaseSize),
-            overrides: settings.popupColorOverrides
+            overridesLight: settings.popupColorOverridesLight,
+            overridesDark: settings.popupColorOverridesDark
         )
     }
 
+    /// The effective appearance-aware color for a role: each side is the
+    /// user's override for that appearance, or the default variant.
     public func color(_ role: PopupColorRole) -> NSColor {
-        if let hex = overrides[role.rawValue], let c = NSColor(popupHex: hex) {
-            return c
-        }
-        return role.defaultColor
+        let light = overridesLight[role.rawValue].flatMap { NSColor(popupHex: $0) }
+        let dark = overridesDark[role.rawValue].flatMap { NSColor(popupHex: $0) }
+        if light == nil && dark == nil { return role.defaultColor }
+        let pair = role.defaultPair
+        return OverlayColors.dynamic(light: light ?? pair.light, dark: dark ?? pair.dark)
     }
 
     public func font(_ role: FontRole, weight: NSFont.Weight, tier: FontTier) -> NSFont {
@@ -353,21 +597,22 @@ Expected: PASS.
 ```bash
 git add Sources/OpWhoLib/PopupStyle.swift Tests/PopupStyleTests.swift
 git commit -F - <<'EOF'
-feat: add PopupStyle resolver with color roles and hex helpers
+feat: add PopupStyle resolver with per-appearance color overrides
 
-PopupColorRole maps each popup color to its OverlayColors default;
-PopupStyle.color resolves an override (or the default). Adds
+PopupColorRole maps each popup color to its OverlayColors default (and
+its light/dark pair); PopupStyle.color composes a dynamic color from
+the per-appearance override or the default variant, side by side. Adds
 NSColor(popupHex:)/popupHexString for persistence.
 EOF
 ```
 
 ---
 
-## Task 3: `PopupStyle` — font and size resolution
+## Task 4: `PopupStyle` — font and size resolution
 
 **Files:**
 - Test: `Tests/PopupStyleTests.swift`
-- (Implementation already written in Task 2; this task adds the font/size tests that lock its behavior.)
+- (Implementation already written in Task 3; this task adds the font/size tests that lock its behavior.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -386,7 +631,8 @@ struct PopupStyleFontTests {
 
     @Test("custom base size shifts every tier")
     func customBase() {
-        let s = PopupStyle(uiFontName: nil, monoFontName: nil, baseSize: 16, overrides: [:])
+        let s = PopupStyle(uiFontName: nil, monoFontName: nil, baseSize: 16,
+                           overridesLight: [:], overridesDark: [:])
         #expect(s.font(.mono, weight: .regular, tier: .small).pointSize == 15)
         #expect(s.font(.mono, weight: .regular, tier: .base).pointSize == 16)
         #expect(s.font(.mono, weight: .regular, tier: .large).pointSize == 17)
@@ -400,14 +646,16 @@ struct PopupStyleFontTests {
 
     @Test("unknown family name falls back to a system font of the right size")
     func unknownFamilyFallsBack() {
-        let s = PopupStyle(uiFontName: "No Such Font XYZ", monoFontName: nil, baseSize: 12, overrides: [:])
+        let s = PopupStyle(uiFontName: "No Such Font XYZ", monoFontName: nil, baseSize: 12,
+                           overridesLight: [:], overridesDark: [:])
         let f = s.font(.ui, weight: .semibold, tier: .large)
         #expect(f.pointSize == 13)   // still sized correctly
     }
 
     @Test("a real custom family is honored")
     func customFamilyHonored() {
-        let s = PopupStyle(uiFontName: "Menlo", monoFontName: nil, baseSize: 12, overrides: [:])
+        let s = PopupStyle(uiFontName: "Menlo", monoFontName: nil, baseSize: 12,
+                           overridesLight: [:], overridesDark: [:])
         let f = s.font(.ui, weight: .regular, tier: .base)
         #expect(f.familyName == "Menlo")
         #expect(f.pointSize == 12)
@@ -418,7 +666,7 @@ struct PopupStyleFontTests {
 - [ ] **Step 2: Run tests to verify they pass**
 
 Run: `swift test --filter PopupStyleFont 2>&1 | tail -20`
-Expected: PASS (implementation from Task 2 already satisfies these).
+Expected: PASS (implementation from Task 3 already satisfies these).
 
 Note: if `unknownFamilyFallsBack` fails because `NSFont(descriptor:)` synthesized a font at the wrong size, harden `PopupStyle.font` by also asserting the resolved font's `familyName != nil`; but the descriptor path returns nil for unknown families on macOS, so the system fallback runs. Do not change the test.
 
@@ -433,7 +681,235 @@ EOF
 
 ---
 
-## Task 4: Route `OverlayPanel` through `PopupStyle`
+## Task 5: `snapToContrast`
+
+**Files:**
+- Create: `Sources/OpWhoLib/ContrastSnap.swift`
+- Test: `Tests/ContrastSnapTests.swift`
+
+The badge's one-click fix: given a failing color, return the nearest color
+(same hue, then reduced saturation only if needed) meeting the ratio against a
+background. Pure sRGB math, no AppKit views.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `Tests/ContrastSnapTests.swift`:
+
+```swift
+import Testing
+@testable import OpWhoLib
+
+@Suite("snapToContrast")
+struct ContrastSnapTests {
+    // The popup's real backgrounds: white (light) and #1E1E1E (dark).
+    let lightBG = (r: 1.0, g: 1.0, b: 1.0)
+    let darkBG = (r: 30.0 / 255, g: 30.0 / 255, b: 30.0 / 255)
+
+    @Test("full hue sweep snaps to passing against both backgrounds")
+    func hueSweep() {
+        for deg in stride(from: 0, to: 360, by: 15) {
+            let c = hsbToRGB(h: Double(deg), s: 1, v: 1)
+            for bg in [lightBG, darkBG] {
+                let snapped = snapToContrast(c, against: bg)
+                #expect(contrastRatio(snapped, bg) >= 4.5,
+                        "hue \(deg) failed: got \(contrastRatio(snapped, bg))")
+            }
+        }
+    }
+
+    @Test("already-passing input is returned unchanged")
+    func idempotent() {
+        let navy = (r: 0.0, g: 0.0, b: 0.5)
+        let snapped = snapToContrast(navy, against: lightBG)
+        #expect(snapped == navy)
+    }
+
+    @Test("hue and saturation are preserved when reachable")
+    func huePreserved() {
+        let lightRed = (r: 1.0, g: 0.6, b: 0.6)   // fails on white
+        let snapped = snapToContrast(lightRed, against: lightBG)
+        #expect(contrastRatio(snapped, lightBG) >= 4.5)
+        let (h, s, _) = rgbToHSB(snapped)
+        #expect(min(h, 360 - h) < 2)   // still red
+        #expect(abs(s - 0.4) < 0.02)   // saturation untouched
+    }
+
+    @Test("saturated blue desaturates against the dark background")
+    func blueDesaturates() {
+        // Pure blue maxes out at Y ≈ 0.072, below the ≈0.23 floor the dark
+        // background demands — unreachable at full saturation.
+        let blue = (r: 0.0, g: 0.0, b: 1.0)
+        let snapped = snapToContrast(blue, against: darkBG)
+        #expect(contrastRatio(snapped, darkBG) >= 4.5)
+        let (_, s, _) = rgbToHSB(snapped)
+        #expect(s < 1.0)
+    }
+
+    @Test("grayscale extremes snap fine")
+    func extremes() {
+        let white = (r: 1.0, g: 1.0, b: 1.0)
+        let black = (r: 0.0, g: 0.0, b: 0.0)
+        #expect(contrastRatio(snapToContrast(white, against: lightBG), lightBG) >= 4.5)
+        #expect(contrastRatio(snapToContrast(black, against: darkBG), darkBG) >= 4.5)
+    }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `swift test --filter ContrastSnap 2>&1 | tail -20`
+Expected: FAIL — `cannot find 'snapToContrast' in scope`.
+
+- [ ] **Step 3: Implement `ContrastSnap.swift`**
+
+Create `Sources/OpWhoLib/ContrastSnap.swift`:
+
+```swift
+import Foundation
+
+/// Nearest color to `color` (same hue; saturation reduced only if that hue
+/// can't reach the ratio at any brightness) meeting `ratio` against
+/// `background`. Used by the Appearance tab's contrast badges — guide, don't
+/// block: the caller decides whether to apply the result.
+///
+/// Relies on WCAG relative luminance being strictly monotonic in HSB
+/// brightness at fixed hue/saturation, so each pass/fail boundary is a single
+/// brightness value found by bisection.
+public func snapToContrast(
+    _ color: (r: Double, g: Double, b: Double),
+    against background: (r: Double, g: Double, b: Double),
+    ratio: Double = 4.5
+) -> (r: Double, g: Double, b: Double) {
+    if contrastRatio(color, background) >= ratio { return color }
+
+    let (h, s, v) = rgbToHSB(color)
+    // Aim slightly past the requested ratio so 8-bit quantization of the
+    // result can't round it back below threshold.
+    let target = ratio + 0.06
+
+    var sat = s
+    while true {
+        if let snapped = snapBrightness(h: h, s: sat, v: v, background: background,
+                                        target: target, minimum: ratio) {
+            return snapped
+        }
+        if sat <= 0 { break }
+        sat = max(0, sat - 0.05)
+    }
+    // Unreachable for real backgrounds (grayscale always spans the required
+    // luminance), but keep a safe fallback.
+    let black = (r: 0.0, g: 0.0, b: 0.0)
+    let white = (r: 1.0, g: 1.0, b: 1.0)
+    return contrastRatio(black, background) >= contrastRatio(white, background) ? black : white
+}
+
+/// At fixed hue/saturation, find the brightness nearest `v` whose color meets
+/// `target` against `background`; nil if no brightness at this saturation can.
+private func snapBrightness(
+    h: Double, s: Double, v: Double,
+    background: (r: Double, g: Double, b: Double),
+    target: Double, minimum: Double
+) -> (r: Double, g: Double, b: Double)? {
+    func ratioAt(_ vv: Double) -> Double {
+        contrastRatio(hsbToRGB(h: h, s: s, v: vv), background)
+    }
+
+    var best: (r: Double, g: Double, b: Double)?
+    var bestDist = Double.infinity
+
+    func consider(_ vv: Double) {
+        let c = quantize(hsbToRGB(h: h, s: s, v: vv))
+        guard contrastRatio(c, background) >= minimum, abs(vv - v) < bestDist else { return }
+        best = c
+        bestDist = abs(vv - v)
+    }
+
+    // Darker-than-background branch: contrast decreases as brightness rises.
+    // Feasible iff v=0 (black-ward extreme) passes; bisect to the largest
+    // passing brightness (the one nearest the input from below).
+    if ratioAt(0) >= target {
+        var lo = 0.0, hi = 1.0          // invariant: ratioAt(lo) >= target
+        for _ in 0..<30 {
+            let mid = (lo + hi) / 2
+            if ratioAt(mid) >= target { lo = mid } else { hi = mid }
+        }
+        consider(lo)
+    }
+    // Lighter-than-background branch: contrast increases as brightness rises.
+    // Feasible iff v=1 passes; bisect to the smallest passing brightness.
+    if ratioAt(1) >= target {
+        var lo = 0.0, hi = 1.0          // invariant: ratioAt(hi) >= target
+        for _ in 0..<30 {
+            let mid = (lo + hi) / 2
+            if ratioAt(mid) >= target { hi = mid } else { lo = mid }
+        }
+        consider(hi)
+    }
+    return best
+}
+
+/// Round each channel to the nearest 8-bit value, matching what persisting
+/// as #RRGGBB will store.
+private func quantize(_ c: (r: Double, g: Double, b: Double)) -> (r: Double, g: Double, b: Double) {
+    ((c.r * 255).rounded() / 255, (c.g * 255).rounded() / 255, (c.b * 255).rounded() / 255)
+}
+
+func rgbToHSB(_ c: (r: Double, g: Double, b: Double)) -> (h: Double, s: Double, v: Double) {
+    let mx = max(c.r, c.g, c.b), mn = min(c.r, c.g, c.b)
+    let d = mx - mn
+    var h = 0.0
+    if d > 0 {
+        switch mx {
+        case c.r: h = ((c.g - c.b) / d).truncatingRemainder(dividingBy: 6)
+        case c.g: h = (c.b - c.r) / d + 2
+        default:  h = (c.r - c.g) / d + 4
+        }
+        h *= 60
+        if h < 0 { h += 360 }
+    }
+    return (h, mx == 0 ? 0 : d / mx, mx)
+}
+
+func hsbToRGB(h: Double, s: Double, v: Double) -> (r: Double, g: Double, b: Double) {
+    let c = v * s
+    let hp = h / 60
+    let x = c * (1 - abs(hp.truncatingRemainder(dividingBy: 2) - 1))
+    let (r1, g1, b1): (Double, Double, Double)
+    switch hp {
+    case ..<1: (r1, g1, b1) = (c, x, 0)
+    case ..<2: (r1, g1, b1) = (x, c, 0)
+    case ..<3: (r1, g1, b1) = (0, c, x)
+    case ..<4: (r1, g1, b1) = (0, x, c)
+    case ..<5: (r1, g1, b1) = (x, 0, c)
+    default:   (r1, g1, b1) = (c, 0, x)
+    }
+    let m = v - c
+    return (r1 + m, g1 + m, b1 + m)
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `swift test --filter ContrastSnap 2>&1 | tail -20`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Sources/OpWhoLib/ContrastSnap.swift Tests/ContrastSnapTests.swift
+git commit -F - <<'EOF'
+feat: add snapToContrast for one-click WCAG fixes
+
+Bisects HSB brightness (luminance is monotonic in brightness at fixed
+hue/saturation) to the nearest color meeting the ratio, desaturating
+only when the hue can't reach it. Targets slightly past the ratio so
+8-bit quantization can't undercut it.
+EOF
+```
+
+---
+
+## Task 6: Route `OverlayPanel` through `PopupStyle`
 
 **Files:**
 - Modify: `Sources/OpWhoLib/OverlayPanel.swift`
@@ -595,7 +1071,7 @@ EOF
 
 ---
 
-## Task 5: Sample entry factory + wire `style` into live popups
+## Task 7: Sample entry factory + wire `style` into live popups
 
 **Files:**
 - Modify: `Sources/OpWhoLib/OverlayPanel.swift` (add `sampleEntry`)
@@ -614,7 +1090,9 @@ struct OverlayPanelSampleEntryTests {
     func sampleRenders() {
         let panel = OverlayPanel()
         panel.style = PopupStyle(uiFontName: nil, monoFontName: "Menlo",
-                                 baseSize: 14, overrides: ["claude": "#AA33FF"])
+                                 baseSize: 14,
+                                 overridesLight: ["claude": "#AA33FF"],
+                                 overridesDark: ["claude": "#CC77FF"])
         let view = panel.buildContentView(entries: [OverlayPanel.sampleEntry()])
         let stack = view as? NSStackView
         #expect(stack != nil)
@@ -717,12 +1195,12 @@ EOF
 
 ---
 
-## Task 6: Slim `GeneralPane` down to "Run on startup"
+## Task 8: Slim `GeneralPane` down to "Run on startup"
 
 **Files:**
 - Modify: `Sources/op-who/GeneralPane.swift`
 
-Dense-popup and appearance controls move to `AppearancePane` (Task 7). `GeneralPane` keeps only the startup toggle and its `SMAppService` wiring.
+Dense-popup and appearance controls move to `AppearancePane` (Task 9). `GeneralPane` keeps only the startup toggle and its `SMAppService` wiring.
 
 - [ ] **Step 1: Remove the moved controls and their handlers**
 
@@ -811,12 +1289,12 @@ EOF
 
 ---
 
-## Task 7: Create `AppearancePane`
+## Task 9: Create `AppearancePane` (with contrast badges)
 
 **Files:**
 - Create: `Sources/op-who/AppearancePane.swift`
 
-Holds: Dense popup checkbox, System/Light/Dark segmented control, UI/Mono font family popups, base-size stepper, per-role color wells, Restore defaults, and Show/Hide Preview. Every control writes to `AppSettings` immediately.
+Holds: Dense popup checkbox, System/Light/Dark segmented control, UI/Mono font family popups, base-size stepper, a **Light and a Dark color well per role — each with a live WCAG AA contrast badge (click a failing badge to snap to the nearest passing color)**, Restore defaults, and Show/Hide Preview. Every control writes to `AppSettings` immediately.
 
 - [ ] **Step 1: Write the pane**
 
@@ -829,6 +1307,10 @@ import OpWhoLib
 /// The Appearance tab: all popup visual settings. Each control writes to
 /// AppSettings immediately, so the Preview button (and the next real popup)
 /// reflect changes without an explicit save.
+///
+/// Each color well carries a WCAG contrast badge computed against the popup
+/// background for that well's appearance. Guide, don't block: a failing color
+/// stays selectable; clicking its badge snaps to the nearest passing color.
 final class AppearancePane: NSObject {
 
     private let settings = AppSettings()
@@ -848,13 +1330,17 @@ final class AppearancePane: NSObject {
     private let sizeStepper = NSStepper()
     private let sizeLabel = NSTextField(labelWithString: "")
 
-    // Colors: one well per role, in declaration order.
-    private var colorWells: [PopupColorRole: NSColorWell] = [:]
+    // Colors: a Light and a Dark well (+ contrast badge) per role.
+    private var lightWells: [PopupColorRole: NSColorWell] = [:]
+    private var darkWells: [PopupColorRole: NSColorWell] = [:]
+    private var lightBadges: [PopupColorRole: NSButton] = [:]
+    private var darkBadges: [PopupColorRole: NSButton] = [:]
 
     // Preview.
     private var previewPanel: OverlayPanel?
 
     private static let systemDefaultTitle = "System default"
+    private static let requiredRatio = 4.5
 
     private(set) lazy var view: NSView = makeContentView()
 
@@ -917,6 +1403,13 @@ final class AppearancePane: NSObject {
         return l
     }
 
+    private func columnLabel(_ text: String) -> NSTextField {
+        let l = NSTextField(labelWithString: text)
+        l.font = NSFont.boldSystemFont(ofSize: 11)
+        l.textColor = .secondaryLabelColor
+        return l
+    }
+
     private func spacer() -> NSView {
         let v = NSView()
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -945,29 +1438,50 @@ final class AppearancePane: NSObject {
         return row
     }
 
-    /// A two-column grid of role name → color well.
+    /// Grid: role name · Light well · badge · Dark well · badge.
     private func colorGrid() -> NSView {
-        let cells: [[NSView]] = PopupColorRole.allCases.map { role in
-            let well = NSColorWell()
-            well.color = PopupStyle(settings: settings).color(role)
-            well.translatesAutoresizingMaskIntoConstraints = false
-            well.widthAnchor.constraint(equalToConstant: 44).isActive = true
-            well.heightAnchor.constraint(equalToConstant: 22).isActive = true
-            well.target = self
-            well.action = #selector(colorChanged(_:))
-            well.tag = colorTag(for: role)
-            colorWells[role] = well
-
+        let header: [NSView] = [
+            NSTextField(labelWithString: ""),
+            columnLabel("Light"), NSTextField(labelWithString: ""),
+            columnLabel("Dark"), NSTextField(labelWithString: ""),
+        ]
+        let rows: [[NSView]] = [header] + PopupColorRole.allCases.map { role in
             let name = NSTextField(labelWithString: role.rawValue)
             name.font = NSFont.systemFont(ofSize: 12)
-            return [name, well]
+            let (lightWell, lightBadge) = makeWellAndBadge(role: role, dark: false)
+            let (darkWell, darkBadge) = makeWellAndBadge(role: role, dark: true)
+            lightWells[role] = lightWell
+            lightBadges[role] = lightBadge
+            darkWells[role] = darkWell
+            darkBadges[role] = darkBadge
+            return [name, lightWell, lightBadge, darkWell, darkBadge]
         }
-        let grid = NSGridView(views: cells)
+        let grid = NSGridView(views: rows)
         grid.rowSpacing = 4
-        grid.columnSpacing = 12
+        grid.columnSpacing = 8
         grid.translatesAutoresizingMaskIntoConstraints = false
         if grid.numberOfColumns > 0 { grid.column(at: 0).xPlacement = .leading }
         return grid
+    }
+
+    private func makeWellAndBadge(role: PopupColorRole, dark: Bool) -> (NSColorWell, NSButton) {
+        let well = NSColorWell()
+        well.color = effectiveColor(role: role, dark: dark)
+        well.translatesAutoresizingMaskIntoConstraints = false
+        well.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        well.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        well.target = self
+        well.action = #selector(colorChanged(_:))
+        well.tag = tag(role: role, dark: dark)
+
+        let badge = NSButton(title: "", target: self, action: #selector(badgeClicked(_:)))
+        badge.isBordered = false
+        badge.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        badge.tag = tag(role: role, dark: dark)
+        badge.toolTip = "WCAG contrast vs. the popup background. "
+            + "Click a failing badge to snap to the nearest passing color."
+        refreshBadge(badge, color: well.color, dark: dark)
+        return (well, badge)
     }
 
     private func restoreRow() -> NSView {
@@ -986,6 +1500,43 @@ final class AppearancePane: NSObject {
         row.orientation = .horizontal
         row.spacing = 8
         return row
+    }
+
+    // MARK: - Colors, badges, snapping
+
+    /// Encode role+side as an NSControl tag: role index × 2, +1 for dark.
+    private func tag(role: PopupColorRole, dark: Bool) -> Int {
+        (PopupColorRole.allCases.firstIndex(of: role) ?? 0) * 2 + (dark ? 1 : 0)
+    }
+
+    private func roleAndSide(forTag tag: Int) -> (role: PopupColorRole, dark: Bool)? {
+        let all = PopupColorRole.allCases
+        let idx = tag / 2
+        guard all.indices.contains(idx) else { return nil }
+        return (all[idx], tag % 2 == 1)
+    }
+
+    /// The user's override for this side, or the default variant, as a
+    /// concrete (non-dynamic) color the well and badge can use directly.
+    private func effectiveColor(role: PopupColorRole, dark: Bool) -> NSColor {
+        let overrides = dark ? settings.popupColorOverridesDark : settings.popupColorOverridesLight
+        if let hex = overrides[role.rawValue], let c = NSColor(popupHex: hex) { return c }
+        let pair = role.defaultPair
+        return OverlayColors.resolved(dark ? pair.dark : pair.light, dark: dark)
+    }
+
+    private func backgroundSRGB(dark: Bool) -> (r: Double, g: Double, b: Double) {
+        let pair = OverlayColors.backgroundPair
+        return OverlayColors.srgb(dark ? pair.dark : pair.light)
+    }
+
+    private func refreshBadge(_ badge: NSButton, color: NSColor, dark: Bool) {
+        let fg = OverlayColors.srgb(OverlayColors.resolved(color, dark: dark))
+        let ratio = contrastRatio(fg, backgroundSRGB(dark: dark))
+        let passing = ratio >= Self.requiredRatio
+        badge.title = String(format: "%.1f %@", ratio, passing ? "✓" : "✗")
+        badge.contentTintColor = passing ? .secondaryLabelColor : .systemOrange
+        badge.isEnabled = !passing
     }
 
     // MARK: - Wiring
@@ -1013,15 +1564,6 @@ final class AppearancePane: NSObject {
         } else {
             popup.selectItem(withTitle: Self.systemDefaultTitle)
         }
-    }
-
-    /// Encode a role as an NSControl tag via its position in `allCases`.
-    private func colorTag(for role: PopupColorRole) -> Int {
-        PopupColorRole.allCases.firstIndex(of: role) ?? 0
-    }
-    private func role(forTag tag: Int) -> PopupColorRole? {
-        let all = PopupColorRole.allCases
-        return all.indices.contains(tag) ? all[tag] : nil
     }
 
     private func updateSizeLabel() {
@@ -1059,16 +1601,36 @@ final class AppearancePane: NSObject {
     }
 
     @objc private func colorChanged(_ sender: NSColorWell) {
-        guard let role = role(forTag: sender.tag) else { return }
-        var overrides = settings.popupColorOverrides
+        guard let (role, dark) = roleAndSide(forTag: sender.tag) else { return }
+        var overrides = dark ? settings.popupColorOverridesDark : settings.popupColorOverridesLight
         overrides[role.rawValue] = sender.color.popupHexString
-        settings.popupColorOverrides = overrides
+        if dark { settings.popupColorOverridesDark = overrides }
+        else { settings.popupColorOverridesLight = overrides }
+        if let badge = dark ? darkBadges[role] : lightBadges[role] {
+            refreshBadge(badge, color: sender.color, dark: dark)
+        }
+    }
+
+    @objc private func badgeClicked(_ sender: NSButton) {
+        guard let (role, dark) = roleAndSide(forTag: sender.tag),
+              let well = dark ? darkWells[role] : lightWells[role] else { return }
+        let fg = OverlayColors.srgb(OverlayColors.resolved(well.color, dark: dark))
+        let snapped = snapToContrast(fg, against: backgroundSRGB(dark: dark),
+                                     ratio: Self.requiredRatio)
+        well.color = NSColor(srgbRed: snapped.r, green: snapped.g, blue: snapped.b, alpha: 1)
+        colorChanged(well)   // persist + badge refresh via the normal path
     }
 
     @objc private func restoreDefaults(_ sender: NSButton) {
-        settings.popupColorOverrides = [:]
-        for (role, well) in colorWells {
-            well.color = role.defaultColor
+        settings.popupColorOverridesLight = [:]
+        settings.popupColorOverridesDark = [:]
+        for role in PopupColorRole.allCases {
+            for dark in [false, true] {
+                guard let well = dark ? darkWells[role] : lightWells[role],
+                      let badge = dark ? darkBadges[role] : lightBadges[role] else { continue }
+                well.color = effectiveColor(role: role, dark: dark)
+                refreshBadge(badge, color: well.color, dark: dark)
+            }
         }
     }
 
@@ -1098,24 +1660,27 @@ final class AppearancePane: NSObject {
 - [ ] **Step 2: Build**
 
 Run: `swift build 2>&1 | tail -15`
-Expected: FAILS only at the not-yet-updated `ConfigWindowController` (it doesn't reference `AppearancePane` yet, so it should actually build). If the build succeeds, good; if it errors on `AppearancePane` being unused, that's not an error in Swift — proceed.
+Expected: build succeeds (nothing references `AppearancePane` yet; unused types are not an error in Swift).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add Sources/op-who/AppearancePane.swift
 git commit -F - <<'EOF'
-feat: add AppearancePane with fonts, size, color wells, and preview
+feat: add AppearancePane with per-appearance color wells and WCAG badges
 
 New Appearance-tab pane owning dense-popup, light/dark, font family
-popups, base-size stepper, per-role color wells with restore, and a
-Show/Hide Preview backed by OverlayPanel.sampleEntry.
+popups, base-size stepper, and a Light+Dark color well per role. Each
+well shows a live WCAG AA contrast badge against its own popup
+background; clicking a failing badge snaps to the nearest passing
+color (guide, don't block). Includes restore-defaults and a Show/Hide
+Preview backed by OverlayPanel.sampleEntry.
 EOF
 ```
 
 ---
 
-## Task 8: Tabbed Settings window
+## Task 10: Tabbed Settings window
 
 **Files:**
 - Modify: `Sources/op-who/ConfigWindowController.swift`
@@ -1254,7 +1819,9 @@ scripts/bundle.sh && open .build/op-who.app 2>/dev/null || echo "check scripts/b
 (If the bundle output path differs, use the path `scripts/bundle.sh` prints.) Then, from the menu-bar icon, open **Settings** and confirm:
 - Three tabs: General, Appearance, Rules.
 - **General** shows only "Run op-who on startup".
-- **Appearance** shows dense popup, System/Light/Dark, UI/Mono font popups, base-size stepper, the color wells, "Restore default colors", and Show/Hide Preview.
+- **Appearance** shows dense popup, System/Light/Dark, UI/Mono font popups, base-size stepper, the Light/Dark color-well grid with contrast badges, "Restore default colors", and Show/Hide Preview.
+- All default colors show passing badges (`✓`) in both columns.
+- Pick a pale yellow in a Light well → badge flips to `✗` (orange, enabled); click the badge → the well darkens to a same-hue passing color and the badge flips to `✓`.
 - **Rules** shows the rules table as before.
 - Click **Show Preview** → the popup appears using current settings; change a color / base size / font, click Show Preview again → it reflects the change; **Hide Preview** dismisses it; closing Settings also dismisses it.
 
@@ -1273,7 +1840,7 @@ EOF
 
 ---
 
-## Task 9: Full verification & docs
+## Task 11: Full verification & docs
 
 **Files:**
 - Modify: `CLAUDE.md` (document the new settings surface)
@@ -1281,14 +1848,14 @@ EOF
 - [ ] **Step 1: Full build + test**
 
 Run: `swift build 2>&1 | tail -5 && swift test 2>&1 | tail -20`
-Expected: build succeeds; all tests pass (AppSettings, PopupStyle, OverlayPanel, BodyTable, OverlayColors contrast, and the rest).
+Expected: build succeeds; all tests pass (AppSettings, PopupStyle, ContrastSnap, OverlayColors pairs + contrast, OverlayPanel, BodyTable, and the rest).
 
 - [ ] **Step 2: Update `CLAUDE.md`**
 
 In the "Key design decisions" list, append a bullet after the popup-body bullet:
 
 ```markdown
-- Popup fonts and colors are configurable (`PopupStyle.swift`): `AppSettings` stores an optional UI-font family, mono-font family, a base size (default 12; the popup's three tiers render at base−1/base/base+1), and per-role color overrides (`popupColorOverrides`, keyed by `PopupColorRole.rawValue`). `PopupStyle` resolves each request to a concrete `NSFont`/`NSColor`, falling back to the system font or the WCAG-audited `OverlayColors` default; `OverlayColors` stays the home of the defaults and the contrast test. The Settings window is an `NSTabView` (General / Appearance / Rules): `GeneralPane` holds only Run-on-startup; `AppearancePane` owns dense-popup, light/dark, the font pickers, size stepper, per-role color wells, and a Show/Hide Preview backed by `OverlayPanel.sampleEntry()`.
+- Popup fonts and colors are configurable (`PopupStyle.swift`): `AppSettings` stores an optional UI-font family, mono-font family, a base size (default 12; the popup's three tiers render at base−1/base/base+1), and **per-appearance** color overrides (`popupColorOverridesLight`/`popupColorOverridesDark`, keyed by `PopupColorRole.rawValue`). `PopupStyle` resolves each request to a concrete `NSFont`/`NSColor`, composing each appearance side from the override or the `OverlayColors` default pair; `OverlayColors` stays the home of the defaults (now exposed as `(light, dark)` pairs) and the contrast test. The Settings window is an `NSTabView` (General / Appearance / Rules): `GeneralPane` holds only Run-on-startup; `AppearancePane` owns dense-popup, light/dark, the font pickers, size stepper, a Light+Dark color well per role — each with a live WCAG AA contrast badge against its own popup background, click a failing badge to snap to the nearest passing color via `snapToContrast` (`ContrastSnap.swift`; guide, don't block) — and a Show/Hide Preview backed by `OverlayPanel.sampleEntry()`.
 ```
 
 - [ ] **Step 3: Commit**
@@ -1308,8 +1875,8 @@ Use the `superpowers:finishing-a-development-branch` skill to decide how to inte
 
 ## Notes for the implementer
 
-- **Regression guard:** Tasks 1-3 are pure TDD. Task 4 is a behavior-preserving refactor — its guard is that the *existing* `OverlayPanelTests`, `BodyTableRenderTests`, and `OverlayColorsContrastTests` stay green with the default style.
-- **No WCAG enforcement on overrides:** deliberate. The contrast test guards only the built-in defaults; custom colors are the user's call.
-- **Static overrides:** one color per role, applied in both light and dark (per the approved spec). The Preview button + the light/dark control let the user check both appearances.
+- **Regression guard:** Tasks 1-5 are pure TDD. Task 6 is a behavior-preserving refactor — its guard is that the *existing* `OverlayPanelTests`, `BodyTableRenderTests`, and `OverlayColorsContrastTests` stay green with the default style.
+- **WCAG guidance, not enforcement:** the contrast badges + snap are advisory (guide, don't block). A failing custom color is the user's call; the contrast test still guards only the built-in defaults.
+- **Per-appearance overrides:** each role stores an independent light and dark hex (`popupColorOverridesLight`/`Dark`). This is what makes AA 4.5:1 achievable — no single static color can pass against both the white light-mode background and the ~#1E1E1E dark-mode background (their compliant luminance intervals don't intersect; see the WCAG spec's math appendix).
 - **Chrome stays fixed:** the "▸ details" toggle, the Show Tab / Send Message buttons, and the secondary/tertiary system label colors are intentionally *not* themed or scaled.
 - **Commit message hygiene:** all commits above use single-quoted HEREDOCs so backticks aren't interpolated (see `CLAUDE.md`). Never advertise the assistant in commit messages.
