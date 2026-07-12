@@ -2,31 +2,15 @@ import AppKit
 import OpWhoLib
 import ServiceManagement
 
-/// Options section inside the Settings window. Holds the "Run on startup"
-/// toggle that used to live in the status-bar menu, plus the dense-popup
-/// and appearance overrides. Renders as a bare stack of controls — the
-/// window's own title bar reads "op-who Settings", and a section header
-/// above a handful of toggles would be visual noise. Wrapped in a
-/// dedicated type so future global toggles can be added without reshaping
-/// the surrounding layout; the section header can be reintroduced if more
-/// options arrive.
+/// The General tab: non-visual global options. Currently just the
+/// "Run on startup" toggle (backed by SMAppService). Visual popup settings
+/// live in `AppearancePane`.
 final class GeneralPane: NSObject {
-
-    private let settings = AppSettings()
 
     private let startupCheckbox = NSButton(
         checkboxWithTitle: "Run op-who on startup",
         target: nil,
         action: nil
-    )
-
-    private let denseCheckbox = NSButton(
-        checkboxWithTitle: "Dense popup (collapse rows that don't apply)",
-        target: nil, action: nil
-    )
-    private let appearanceLabel = NSTextField(labelWithString: "Appearance:")
-    private let appearanceControl = NSSegmentedControl(
-        labels: ["System", "Light", "Dark"], trackingMode: .selectOne, target: nil, action: nil
     )
 
     private(set) lazy var view: NSView = makeContentView()
@@ -37,20 +21,6 @@ final class GeneralPane: NSObject {
         startupCheckbox.target = self
         startupCheckbox.action = #selector(toggleStartup(_:))
         refreshState()
-
-        denseCheckbox.target = self
-        denseCheckbox.action = #selector(toggleDense(_:))
-        denseCheckbox.state = settings.densePopup ? .on : .off
-
-        appearanceControl.target = self
-        appearanceControl.action = #selector(changeAppearance(_:))
-        appearanceControl.selectedSegment = {
-            switch settings.appearance {
-            case .system: return 0
-            case .light:  return 1
-            case .dark:   return 2
-            }
-        }()
     }
 
     /// Re-read the SMAppService status. Called from the window-controller
@@ -62,11 +32,7 @@ final class GeneralPane: NSObject {
     }
 
     private func makeContentView() -> NSView {
-        let appearanceRow = NSStackView(views: [appearanceLabel, appearanceControl])
-        appearanceRow.orientation = .horizontal
-        appearanceRow.spacing = 8
-
-        let stack = NSStackView(views: [startupCheckbox, denseCheckbox, appearanceRow])
+        let stack = NSStackView(views: [startupCheckbox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -92,15 +58,5 @@ final class GeneralPane: NSObject {
             alert.runModal()
         }
         refreshState()
-    }
-
-    @objc private func toggleDense(_ sender: NSButton) {
-        settings.densePopup = (sender.state == .on)
-    }
-
-    @objc private func changeAppearance(_ sender: NSSegmentedControl) {
-        let a: AppAppearance = [.system, .light, .dark][sender.selectedSegment]
-        settings.appearance = a
-        applyAppearance(a)
     }
 }

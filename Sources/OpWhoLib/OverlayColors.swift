@@ -55,6 +55,19 @@ public enum OverlayColors {
         let c = (color.usingColorSpace(.sRGB) ?? color)
         return (Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent))
     }
+
+    /// Snapshot a (possibly appearance-dynamic) color to the concrete sRGB
+    /// color it renders as under `name`. Used to capture a default's light or
+    /// dark component so one variant can be overridden while the other keeps
+    /// its WCAG default.
+    public static func resolved(_ color: NSColor, in name: NSAppearance.Name) -> NSColor {
+        var comps = (r: 0.0, g: 0.0, b: 0.0)
+        let appearance = NSAppearance(named: name) ?? NSAppearance.currentDrawing()
+        appearance.performAsCurrentDrawingAppearance {
+            comps = srgb(color)
+        }
+        return NSColor(srgbRed: comps.r, green: comps.g, blue: comps.b, alpha: 1)
+    }
 }
 
 /// WCAG relative-luminance contrast ratio of two sRGB colors (1…21).

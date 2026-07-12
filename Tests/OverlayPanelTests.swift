@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import OpWhoLib
@@ -278,5 +279,20 @@ struct OverlayPanelTerminalRowTextTests {
             termName: "cmux"
         )
         #expect(text == "trusthere · cmux ⌃3")
+    }
+}
+
+@Suite("OverlayPanel.sampleEntry")
+@MainActor
+struct OverlayPanelSampleEntryTests {
+    @Test("sample entry renders a content view without crashing")
+    func sampleRenders() {
+        let panel = OverlayPanel()
+        panel.style = PopupStyle(uiFontName: nil, monoFontName: "Menlo",
+                                 baseSize: 14, overrides: ["claude": "#AA33FF"])
+        let view = panel.buildContentView(entries: [OverlayPanel.sampleEntry()])
+        let stack = view as? NSStackView
+        #expect(stack != nil)
+        #expect((stack?.arrangedSubviews.count ?? 0) >= 2)  // header + entry
     }
 }

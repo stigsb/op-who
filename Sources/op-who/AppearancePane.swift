@@ -1,0 +1,439 @@
+import AppKit
+import OpWhoLib
+
+/// The Appearance tab: all popup visual settings. Each control writes to
+/// AppSettings immediately, so the Preview button (and the next real popup)
+/// reflect changes without an explicit save.
+final class AppearancePane: NSObject {
+
+    private let settings = AppSettings()
+
+    // Behavior + appearance (moved from GeneralPane).
+    private let denseCheckbox = NSButton(
+        checkboxWithTitle: "Dense popup (collapse rows that don't apply)",
+        target: nil, action: nil
+    )
+    private let appearanceControl = NSSegmentedControl(
+        labels: ["System", "Light", "Dark"], trackingMode: .selectOne, target: nil, action: nil
+    )
+
+    // Fonts.
+    private let uiFontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let monoFontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let sizeStepper = NSStepper()
+    private let sizeLabel = NSTextField(labelWithString: "")
+
+    // Colors: one well per role, in declaration order, editing one appearance
+    // variant at a time (selected by `colorVariantControl`).
+    private var colorWells: [PopupColorRole: NSColorWell] = [:]
+    private var colorBadges: [PopupColorRole: NSButton] = [:]
+    private let colorVariantControl = NSSegmentedControl(
+        labels: ["Light", "Dark"], trackingMode: .selectOne, target: nil, action: nil
+    )
+    /// Which appearance variant the color wells currently edit. Defaults to the
+    /// app's current effective appearance so the wells open on what the user
+    /// is actually looking at.
+    private var colorVariant: ColorVariant = AppearancePane.currentVariant()
+
+    // Preview.
+    private var previewPanel: OverlayPanel?
+
+    private static let systemDefaultTitle = "System default"
+
+    private static func currentVariant() -> ColorVariant {
+        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+    }
+
+    private(set) lazy var view: NSView = makeContentView()
+
+    override init() {
+        super.init()
+        _ = view
+        wireControls()
+    }
+
+    // MARK: - Layout
+
+    private func makeContentView() -> NSView {
+        denseCheckbox.state = settings.densePopup ? .on : .off
+
+        appearanceControl.selectedSegment = {
+            switch settings.appearance {
+            case .system: return 0
+            case .light:  return 1
+            case .dark:   return 2
+            }
+        }()
+
+        populateFontPopup(uiFontPopup, selected: settings.popupUIFontName)
+        populateFontPopup(monoFontPopup, selected: settings.popupMonoFontName)
+
+        sizeStepper.minValue = 9
+        sizeStepper.maxValue = 24
+        sizeStepper.increment = 1
+        sizeStepper.integerValue = Int(settings.popupFontBaseSize.rounded())
+        updateSizeLabel()
+
+        colorVariantControl.selectedSegment = (colorVariant == .dark) ? 1 : 0
+
+        let stack = NSStackView(views: [
+            sectionLabel("Popup"),
+            denseCheckbox,
+            labeledRow("Appearance:", appearanceControl),
+            spacer(),
+            sectionLabel("Fonts"),
+            labeledRow("UI font:", uiFontPopup),
+            labeledRow("Mono font:", monoFontPopup),
+            labeledRow("Base size:", sizeRow()),
+            spacer(),
+            sectionLabel("Colors"),
+            colorVariantRow(),
+            colorGrid(),
+            restoreRow(),
+            spacer(),
+            previewRow(),
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 12, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
+    }
+
+    private func sectionLabel(_ text: String) -> NSTextField {
+        let l = NSTextField(labelWithString: text)
+        l.font = NSFont.boldSystemFont(ofSize: 12)
+        l.textColor = .secondaryLabelColor
+        return l
+    }
+
+    private func spacer() -> NSView {
+        let v = NSView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.heightAnchor.constraint(equalToConstant: 6).isActive = true
+        return v
+    }
+
+    private func labeledRow(_ label: String, _ control: NSView) -> NSStackView {
+        let l = NSTextField(labelWithString: label)
+        l.alignment = .right
+        l.translatesAutoresizingMaskIntoConstraints = false
+        l.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        let row = NSStackView(views: [l, control])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
+    }
+
+    private func sizeRow() -> NSStackView {
+        let row = NSStackView(views: [sizeLabel, sizeStepper])
+        row.orientation = .horizontal
+        row.spacing = 6
+        row.alignment = .centerY
+        sizeLabel.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        return row
+    }
+
+    /// Per-role color wells laid out as fixed columns of `name → pill` pairs,
+    /// four pairs per row. Built from plain stacks (not an NSGridView, which
+    /// stretched to the pane width and flung its columns apart): each name
+    /// label has a fixed width so the pills line up vertically, and every row
+    /// ends in a low-hugging spacer that absorbs slack so the pills stay put
+    /// at the left instead of drifting as the pane resizes.
+    private func colorGrid() -> NSView {
+        let pairsPerRow = 3
+        var rows: [NSView] = []
+        var cells: [NSView] = []
+        for role in PopupColorRole.allCases {
+            cells.append(colorCell(for: role))
+            if cells.count == pairsPerRow {
+                rows.append(colorRow(cells))
+                cells = []
+            }
+        }
+        if !cells.isEmpty { rows.append(colorRow(cells)) }
+
+        let column = NSStackView(views: rows)
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 6
+        return column
+    }
+
+    /// One `pill → name → badge` cell: the pill leads so each label reads as
+    /// belonging to the color on its left; the fixed-width name keeps the
+    /// columns aligned.
+    private func colorCell(for role: PopupColorRole) -> NSView {
+        let name = NSTextField(labelWithString: role.rawValue)
+        name.font = NSFont.systemFont(ofSize: 11)
+        name.lineBreakMode = .byTruncatingTail
+        name.translatesAutoresizingMaskIntoConstraints = false
+        name.widthAnchor.constraint(equalToConstant: 86).isActive = true
+        let cell = NSStackView(views: [makeColorWell(for: role), name, makeBadge(for: role)])
+        cell.orientation = .horizontal
+        cell.alignment = .centerY
+        cell.spacing = 6
+        return cell
+    }
+
+    /// A row of color cells followed by a spacer that soaks up extra width,
+    /// keeping the cells left-aligned regardless of the row's actual width.
+    private func colorRow(_ cells: [NSView]) -> NSView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: cells + [spacer])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 18
+        return row
+    }
+
+    /// The "Editing: Light | Dark" selector that chooses which appearance the
+    /// color wells edit. In System mode the popup uses whichever the OS is, so
+    /// both variants are worth setting; a forced Light/Dark setting uses one.
+    private func colorVariantRow() -> NSView {
+        let label = NSTextField(labelWithString: "Editing:")
+        let hint = NSTextField(labelWithString: "— colors for the popup in this appearance")
+        hint.font = NSFont.systemFont(ofSize: 10)
+        hint.textColor = .tertiaryLabelColor
+        let row = NSStackView(views: [label, colorVariantControl, hint])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
+    }
+
+    /// Build and register the color well for a role, showing the effective
+    /// color for the currently-selected appearance variant.
+    private func makeColorWell(for role: PopupColorRole) -> NSColorWell {
+        let well = NSColorWell()
+        well.color = PopupStyle(settings: settings).color(role, variant: colorVariant)
+        well.translatesAutoresizingMaskIntoConstraints = false
+        well.widthAnchor.constraint(equalToConstant: 38).isActive = true
+        well.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        well.target = self
+        well.action = #selector(colorChanged(_:))
+        well.tag = colorTag(for: role)
+        colorWells[role] = well
+        return well
+    }
+
+    /// Build and register the WCAG contrast badge for a role's well. Shows the
+    /// ratio vs. the popup background in the edited variant's appearance;
+    /// enabled (clickable) only when failing — click snaps to the nearest
+    /// passing color. Guide, don't block: failing colors stay selectable.
+    /// Call after `makeColorWell(for:)` — the initial refresh reads
+    /// `colorWells[role]`.
+    private func makeBadge(for role: PopupColorRole) -> NSButton {
+        let badge = NSButton(title: "", target: self, action: #selector(badgeClicked(_:)))
+        badge.isBordered = false
+        badge.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        badge.tag = colorTag(for: role)
+        badge.toolTip = "WCAG contrast vs. the popup background. "
+            + "Click a failing badge to snap to the nearest passing color."
+        // Fixed width + right alignment: scores vary in width ("7.4 ✓" vs
+        // "10.0 ✓"), which would otherwise make cell widths ragged and knock
+        // the following columns out of alignment.
+        badge.alignment = .right
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        colorBadges[role] = badge
+        refreshBadge(for: role)
+        return badge
+    }
+
+    /// The popup background as sRGB components in the edited variant's
+    /// appearance (white in light, ~#1E1E1E in dark).
+    private func backgroundSRGB() -> (r: Double, g: Double, b: Double) {
+        OverlayColors.srgb(
+            OverlayColors.resolved(OverlayColors.background, in: colorVariant.appearanceName))
+    }
+
+    private static let requiredRatio = 4.5
+
+    private func refreshBadge(for role: PopupColorRole) {
+        guard let badge = colorBadges[role], let well = colorWells[role] else { return }
+        let fg = OverlayColors.srgb(
+            OverlayColors.resolved(well.color, in: colorVariant.appearanceName))
+        let ratio = contrastRatio(fg, backgroundSRGB())
+        let passing = ratio >= Self.requiredRatio
+        badge.title = String(format: "%.1f %@", ratio, passing ? "✓" : "✗")
+        badge.contentTintColor = passing ? .secondaryLabelColor : .systemOrange
+        badge.isEnabled = !passing
+    }
+
+    private func refreshAllBadges() {
+        PopupColorRole.allCases.forEach { refreshBadge(for: $0) }
+    }
+
+    @objc private func badgeClicked(_ sender: NSButton) {
+        guard let role = role(forTag: sender.tag), let well = colorWells[role] else { return }
+        let fg = OverlayColors.srgb(
+            OverlayColors.resolved(well.color, in: colorVariant.appearanceName))
+        let snapped = snapToContrast(fg, against: backgroundSRGB(), ratio: Self.requiredRatio)
+        well.color = NSColor(srgbRed: snapped.r, green: snapped.g, blue: snapped.b, alpha: 1)
+        colorChanged(well)   // persist + badge refresh via the normal path
+    }
+
+    private func restoreRow() -> NSView {
+        let btn = NSButton(title: "Restore default colors", target: self,
+                           action: #selector(restoreDefaults(_:)))
+        btn.bezelStyle = .rounded
+        return btn
+    }
+
+    private func previewRow() -> NSStackView {
+        let show = NSButton(title: "Show Preview", target: self, action: #selector(showPreview(_:)))
+        show.bezelStyle = .rounded
+        let hide = NSButton(title: "Hide Preview", target: self, action: #selector(hidePreview(_:)))
+        hide.bezelStyle = .rounded
+        let row = NSStackView(views: [show, hide])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    // MARK: - Wiring
+
+    private func wireControls() {
+        denseCheckbox.target = self
+        denseCheckbox.action = #selector(toggleDense(_:))
+        appearanceControl.target = self
+        appearanceControl.action = #selector(changeAppearance(_:))
+        uiFontPopup.target = self
+        uiFontPopup.action = #selector(uiFontChanged(_:))
+        monoFontPopup.target = self
+        monoFontPopup.action = #selector(monoFontChanged(_:))
+        sizeStepper.target = self
+        sizeStepper.action = #selector(sizeChanged(_:))
+        colorVariantControl.target = self
+        colorVariantControl.action = #selector(colorVariantChanged(_:))
+    }
+
+    private func populateFontPopup(_ popup: NSPopUpButton, selected: String?) {
+        popup.removeAllItems()
+        popup.addItem(withTitle: Self.systemDefaultTitle)
+        let families = NSFontManager.shared.availableFontFamilies.sorted()
+        popup.addItems(withTitles: families)
+        if let selected, families.contains(selected) {
+            popup.selectItem(withTitle: selected)
+        } else {
+            popup.selectItem(withTitle: Self.systemDefaultTitle)
+        }
+    }
+
+    /// Encode a role as an NSControl tag via its position in `allCases`.
+    private func colorTag(for role: PopupColorRole) -> Int {
+        PopupColorRole.allCases.firstIndex(of: role) ?? 0
+    }
+    private func role(forTag tag: Int) -> PopupColorRole? {
+        let all = PopupColorRole.allCases
+        return all.indices.contains(tag) ? all[tag] : nil
+    }
+
+    private func updateSizeLabel() {
+        sizeLabel.stringValue = "\(sizeStepper.integerValue)"
+    }
+
+    private func selectedFontName(_ popup: NSPopUpButton) -> String? {
+        let title = popup.titleOfSelectedItem ?? Self.systemDefaultTitle
+        return title == Self.systemDefaultTitle ? nil : title
+    }
+
+    // MARK: - Actions
+
+    @objc private func toggleDense(_ sender: NSButton) {
+        settings.densePopup = (sender.state == .on)
+        refreshPreviewIfShowing()
+    }
+
+    @objc private func changeAppearance(_ sender: NSSegmentedControl) {
+        let a: AppAppearance = [.system, .light, .dark][sender.selectedSegment]
+        settings.appearance = a
+        applyAppearance(a)
+        refreshPreviewIfShowing()
+    }
+
+    @objc private func uiFontChanged(_ sender: NSPopUpButton) {
+        settings.popupUIFontName = selectedFontName(sender)
+        refreshPreviewIfShowing()
+    }
+
+    @objc private func monoFontChanged(_ sender: NSPopUpButton) {
+        settings.popupMonoFontName = selectedFontName(sender)
+        refreshPreviewIfShowing()
+    }
+
+    @objc private func sizeChanged(_ sender: NSStepper) {
+        settings.popupFontBaseSize = Double(sender.integerValue)
+        updateSizeLabel()
+        refreshPreviewIfShowing()
+    }
+
+    /// Flip which appearance variant the wells edit, and reload them to show
+    /// that variant's current colors.
+    @objc private func colorVariantChanged(_ sender: NSSegmentedControl) {
+        colorVariant = (sender.selectedSegment == 1) ? .dark : .light
+        reloadColorWells()
+    }
+
+    @objc private func colorChanged(_ sender: NSColorWell) {
+        guard let role = role(forTag: sender.tag) else { return }
+        var overrides = settings.popupColorOverrides
+        overrides[PopupStyle.overrideKey(role, colorVariant)] = sender.color.popupHexString
+        settings.popupColorOverrides = overrides
+        refreshBadge(for: role)
+        refreshPreviewIfShowing()
+    }
+
+    @objc private func restoreDefaults(_ sender: NSButton) {
+        settings.popupColorOverrides = [:]
+        reloadColorWells()
+        colorWells.values.forEach { $0.deactivate() }
+        refreshPreviewIfShowing()
+    }
+
+    /// Reset every well to the effective color for the current variant (its
+    /// override, or the WCAG default resolved in that appearance).
+    private func reloadColorWells() {
+        let style = PopupStyle(settings: settings)
+        for (role, well) in colorWells {
+            well.color = style.color(role, variant: colorVariant)
+        }
+        refreshAllBadges()
+    }
+
+    @objc private func showPreview(_ sender: NSButton) {
+        presentPreview()
+    }
+
+    @objc private func hidePreview(_ sender: NSButton) {
+        previewPanel?.dismiss()
+        previewPanel = nil
+    }
+
+    private func presentPreview() {
+        previewPanel?.dismiss()
+        let panel = OverlayPanel()
+        panel.densePopup = settings.densePopup
+        panel.style = PopupStyle(settings: settings)
+        panel.show(entries: [OverlayPanel.sampleEntry()], near: nil)
+        previewPanel = panel
+    }
+
+    /// If a preview is on screen, rebuild it so edits show live.
+    private func refreshPreviewIfShowing() {
+        if previewPanel != nil { presentPreview() }
+    }
+
+    /// Called by the window controller when Settings closes, so neither a
+    /// stray preview panel nor an active color well's floating color panel
+    /// lingers after the window is gone.
+    func dismissPreview() {
+        previewPanel?.dismiss()
+        previewPanel = nil
+        colorWells.values.forEach { $0.deactivate() }
+    }
+}

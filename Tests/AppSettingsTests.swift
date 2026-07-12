@@ -45,4 +45,44 @@ struct AppSettingsTests {
         d.set("chartreuse", forKey: "appearance")
         #expect(AppSettings(defaults: d).appearance == .system)
     }
+
+    @Test("popup font names default to nil and persist")
+    func popupFontNames() {
+        let d = freshDefaults()
+        #expect(AppSettings(defaults: d).popupUIFontName == nil)
+        #expect(AppSettings(defaults: d).popupMonoFontName == nil)
+        AppSettings(defaults: d).popupUIFontName = "Helvetica Neue"
+        AppSettings(defaults: d).popupMonoFontName = "Menlo"
+        #expect(AppSettings(defaults: d).popupUIFontName == "Helvetica Neue")
+        #expect(AppSettings(defaults: d).popupMonoFontName == "Menlo")
+    }
+
+    @Test("clearing a popup font name restores nil")
+    func popupFontNameClear() {
+        let d = freshDefaults()
+        let s = AppSettings(defaults: d)
+        s.popupUIFontName = "Menlo"
+        s.popupUIFontName = nil
+        #expect(AppSettings(defaults: d).popupUIFontName == nil)
+    }
+
+    @Test("base font size defaults to 12 and clamps to 9...24")
+    func popupBaseSize() {
+        let d = freshDefaults()
+        #expect(AppSettings(defaults: d).popupFontBaseSize == 12)
+        AppSettings(defaults: d).popupFontBaseSize = 100   // over max
+        #expect(AppSettings(defaults: d).popupFontBaseSize == 24)
+        AppSettings(defaults: d).popupFontBaseSize = 1     // under min
+        #expect(AppSettings(defaults: d).popupFontBaseSize == 9)
+        AppSettings(defaults: d).popupFontBaseSize = 15
+        #expect(AppSettings(defaults: d).popupFontBaseSize == 15)
+    }
+
+    @Test("color overrides default empty and persist")
+    func popupColorOverrides() {
+        let d = freshDefaults()
+        #expect(AppSettings(defaults: d).popupColorOverrides.isEmpty)
+        AppSettings(defaults: d).popupColorOverrides = ["claude": "#AABBCC"]
+        #expect(AppSettings(defaults: d).popupColorOverrides["claude"] == "#AABBCC")
+    }
 }

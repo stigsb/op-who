@@ -1,8 +1,8 @@
 import AppKit
 
-class OverlayPanel {
+public class OverlayPanel {
 
-    struct ProcessEntry {
+    public struct ProcessEntry {
         let pid: pid_t
         let chain: [ProcessNode]
         let triggerArgv: [String]
@@ -57,6 +57,44 @@ class OverlayPanel {
         var gitContext: GitContext? = nil
     }
 
+    public init() {}
+
+    /// A representative entry used by the Settings "Preview" button so fonts
+    /// and colors can be judged without waiting for a real 1Password prompt.
+    public static func sampleEntry() -> ProcessEntry {
+        ProcessEntry(
+            pid: 4242,
+            chain: [
+                ProcessNode(pid: 4242, ppid: 4200, name: "op", tty: "/dev/ttys003",
+                            executablePath: "/opt/homebrew/bin/op", isVerifiedOnePasswordCLI: true),
+                ProcessNode(pid: 4200, ppid: 4100, name: "node", tty: "/dev/ttys003",
+                            executablePath: nil, isVerifiedOnePasswordCLI: false),
+                ProcessNode(pid: 4100, ppid: 1, name: "zsh", tty: "/dev/ttys003",
+                            executablePath: nil, isVerifiedOnePasswordCLI: false),
+            ],
+            triggerArgv: ["op", "read", "op://vault/item/password"],
+            tty: "/dev/ttys003",
+            tabTitle: "op-who",
+            tabShortcut: nil,
+            claudeSession: "preview",
+            claudeContext: nil,
+            scriptInfo: nil,
+            terminalBundleID: "com.googlecode.iterm2",
+            terminalPID: 4000,
+            cwd: "~/git/stigsb/op-who",
+            triggerCwd: "~/git/stigsb/op-who",
+            cmuxWorkspaceID: nil,
+            cmuxTabID: nil,
+            cmuxSurface: nil,
+            pluginUpdate: nil,
+            summary: RequestSummary(kind: .onePasswordCLI, title: "Preview", subtitle: nil, isWarning: false),
+            matchedRuleID: nil,
+            matchedRuleName: nil,
+            matchedBuiltInID: nil,
+            gitContext: GitContext(root: "~/git/stigsb/op-who", branch: "main", worktreeSubpath: nil)
+        )
+    }
+
     private var panel: NSPanel?
 
     /// Trailing time labels updated every second by `elapsedTimer`.
@@ -64,7 +102,11 @@ class OverlayPanel {
     private var elapsedTimer: Timer?
 
     /// When true, droppable rows collapse (see AppSettings.densePopup).
-    var densePopup: Bool = false
+    public var densePopup: Bool = false
+
+    /// Resolves popup fonts and colors from user settings. Defaults to the
+    /// historical appearance; set before `show` (see OnePasswordWatcher).
+    public var style: PopupStyle = .default
 
     /// When the overlay was shown. The elapsed-time column counts up from
     /// here — it measures how long the *approval* has been pending, not how
@@ -72,7 +114,7 @@ class OverlayPanel {
     /// would otherwise start the timer at its full age instead of 0).
     private var shownAt: Date = .distantPast
 
-    func show(entries: [ProcessEntry], near windowFrame: CGRect?) {
+    public func show(entries: [ProcessEntry], near windowFrame: CGRect?) {
 
         let panel = makePanel()
         self.panel = panel
@@ -83,7 +125,7 @@ class OverlayPanel {
         shownAt = Date()
         elapsedLabels.removeAll()
         let contentView = buildContentView(entries: entries)
-        panel.contentView = contentView
+        panel.contentView = wrapInOpaqueBackground(contentView)
         refreshElapsed()
         startElapsedTimer()
 
@@ -121,7 +163,7 @@ class OverlayPanel {
         panel.orderFrontRegardless()
     }
 
-    func dismiss() {
+    public func dismiss() {
         panel?.orderOut(nil)
         panel = nil
         elapsedTimer?.invalidate()
@@ -165,6 +207,11 @@ class OverlayPanel {
         p.level = .popUpMenu
         p.isFloatingPanel = true
         p.hidesOnDeactivate = false
+        // A programmatically created NSPanel defaults to releasing itself when
+        // its close button is clicked. The Settings "Preview" reuses/re-shows
+        // the panel, so a released-then-reordered panel would be a
+        // use-after-free — keep it alive and let `dismiss()` own its lifetime.
+        p.isReleasedWhenClosed = false
         p.titlebarAppearsTransparent = true
         p.titleVisibility = .hidden
         p.isMovableByWindowBackground = true
@@ -172,6 +219,34 @@ class OverlayPanel {
         p.hasShadow = true
 
         return p
+    }
+
+    /// A titled window draws `backgroundColor` only below the titlebar; with
+    /// `titlebarAppearsTransparent` the titlebar strip (including the rounded
+    /// top corners) is left to AppKit's translucent behind-window backdrop,
+    /// so whatever sits under the popup ghosts through the top edge. Since
+    /// `.fullSizeContentView` extends the content view under the titlebar,
+    /// wrapping the content in a view that paints `windowBackgroundColor`
+    /// makes every pixel of the popup opaque — which is also the background
+    /// the WCAG contrast audit in OverlayColors assumes.
+    private func wrapInOpaqueBackground(_ content: NSView) -> NSView {
+        let background = OpaqueBackgroundView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            content.topAnchor.constraint(equalTo: background.topAnchor),
+            content.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+        ])
+        return background
+    }
+
+    private final class OpaqueBackgroundView: NSView {
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.windowBackgroundColor.setFill()
+            dirtyRect.fill()
+        }
     }
 
     /// Internal (not private) so a regression test can exercise the AppKit
@@ -209,7 +284,7 @@ class OverlayPanel {
         row.alignment = .firstBaseline
         row.spacing = 8
 
-        let title = makeLabel("op-who", size: 11, weight: .medium, color: .secondaryLabelColor)
+        let title = makeLabel("op-who", role: .ui, weight: .medium, tier: .small, color: .secondaryLabelColor)
         // Low hugging = absorbs the slack, pushing the timer to the right edge.
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -226,9 +301,8 @@ class OverlayPanel {
     private func makeElapsedLabel() -> NSTextField {
         let timeLabel = makeLabel(
             formatElapsed(0),
-            size: 12, weight: .medium,
-            color: elapsedColor(0),
-            mono: true
+            role: .mono, weight: .medium, tier: .base,
+            color: elapsedColor(0)
         )
         timeLabel.alignment = .right
         // 56pt comfortably fits "59m59s" in 12pt mono.
@@ -330,8 +404,8 @@ class OverlayPanel {
         let cells: [[NSView]] = rows.map { row in
             [
                 makeLabel(
-                    row.label ?? "", size: 11, weight: .regular,
-                    color: OverlayColors.dimLabel, mono: true
+                    row.label ?? "", role: .mono, weight: .regular, tier: .small,
+                    color: style.color(.dimLabel)
                 ),
                 makeBodyValueLabel(row),
             ]
@@ -352,9 +426,9 @@ class OverlayPanel {
         case .action(let kind): color = bodyActionColor(kind); weight = .semibold
         case .who(let kind):    color = bodyWhoColor(kind);    weight = .semibold
         case .field(let field): color = bodyFieldColor(field);   weight = .regular
-        case .asked:            color = OverlayColors.dimLabel;    weight = .regular
+        case .asked:            color = style.color(.dimLabel);    weight = .regular
         }
-        let label = makeLabel(row.value, size: 12, weight: weight, color: color)
+        let label = makeLabel(row.value, role: .ui, weight: weight, tier: .base, color: color)
         if case .asked = row.style {
             label.lineBreakMode = .byWordWrapping
             label.maximumNumberOfLines = 3
@@ -370,27 +444,27 @@ class OverlayPanel {
 
     private func bodyActionColor(_ kind: RequestKind) -> NSColor {
         switch kind {
-        case .onePasswordCLI: return OverlayColors.verifiedOp
-        case .unverifiedOp:   return OverlayColors.unverifiedOp
-        case .ssh:            return OverlayColors.ssh
-        case .unknown:        return OverlayColors.brightValue
+        case .onePasswordCLI: return style.color(.verifiedOp)
+        case .unverifiedOp:   return style.color(.unverifiedOp)
+        case .ssh:            return style.color(.ssh)
+        case .unknown:        return style.color(.brightValue)
         }
     }
 
     private func bodyFieldColor(_ field: FieldColor) -> NSColor {
         switch field {
-        case .gitRoot:  return OverlayColors.gitRoot
-        case .branch:   return OverlayColors.branch
-        case .worktree: return OverlayColors.worktree
-        case .plain:    return OverlayColors.brightValue
+        case .gitRoot:  return style.color(.gitRoot)
+        case .branch:   return style.color(.branch)
+        case .worktree: return style.color(.worktree)
+        case .plain:    return style.color(.brightValue)
         }
     }
 
     private func bodyWhoColor(_ kind: DriverKind) -> NSColor {
         switch kind {
-        case .claude: return OverlayColors.claude
-        case .editor: return OverlayColors.editor
-        case .shell, .other: return OverlayColors.brightValue
+        case .claude: return style.color(.claude)
+        case .editor: return style.color(.editor)
+        case .shell, .other: return style.color(.brightValue)
         }
     }
 
@@ -433,8 +507,8 @@ class OverlayPanel {
         // Workspace/tab name leads because it's what the user actually recognizes;
         // the terminal name trails as a subdued qualifier. Stretches to fill
         // remaining horizontal space so trailing shortcuts and timer can right-align.
-        let label = makeLabel("", size: 13, weight: .semibold, color: .labelColor)
-        let mainFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let label = makeLabel("", role: .ui, weight: .semibold, tier: .large, color: .labelColor)
+        let mainFont = style.font(.ui, weight: .semibold, tier: .large)
         let dim = NSColor.secondaryLabelColor
         let bright = NSColor.labelColor
         let attr = NSMutableAttributedString()
@@ -464,7 +538,7 @@ class OverlayPanel {
         if !shortcutsText.isEmpty {
             let sl = makeLabel(
                 shortcutsText,
-                size: 12, weight: .medium, color: dim, mono: true
+                role: .mono, weight: .medium, tier: .base, color: dim
             )
             sl.alignment = .right
             sl.setContentHuggingPriority(.required, for: .horizontal)
@@ -556,15 +630,13 @@ class OverlayPanel {
 
     private func makeLabel(
         _ text: String,
-        size: CGFloat,
+        role: FontRole,
         weight: NSFont.Weight,
-        color: NSColor = .labelColor,
-        mono: Bool = false
+        tier: FontTier,
+        color: NSColor = .labelColor
     ) -> NSTextField {
         let label = NSTextField(labelWithString: text)
-        label.font = mono
-            ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
-            : NSFont.systemFont(ofSize: size, weight: weight)
+        label.font = style.font(role, weight: weight, tier: tier)
         label.textColor = color
         label.isSelectable = true
         return label
@@ -572,7 +644,7 @@ class OverlayPanel {
 
     /// Small grey monospaced label for an auxiliary detail row.
     private func makeDimDetailLabel(_ text: String) -> NSTextField {
-        let label = makeLabel(text, size: 11, weight: .regular, color: .secondaryLabelColor, mono: true)
+        let label = makeLabel(text, role: .mono, weight: .regular, tier: .small, color: .secondaryLabelColor)
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -586,7 +658,7 @@ class OverlayPanel {
         let nodes = processTreeNodes(
             appName: appName, appPID: entry.terminalPID, chain: entry.chain
         )
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let font = style.font(.mono, weight: .regular, tier: .small)
         let out = NSMutableAttributedString()
         for (i, node) in nodes.enumerated() {
             if i > 0 { out.append(NSAttributedString(string: "\n")) }
@@ -595,9 +667,9 @@ class OverlayPanel {
                 : String(repeating: "   ", count: node.depth - 1) + "\u{2514}\u{2500} "
             let color: NSColor
             switch node.opColor {
-            case .verified:   color = OverlayColors.verifiedOp
-            case .unverified: color = OverlayColors.unverifiedOp
-            case .none:       color = OverlayColors.dimLabel
+            case .verified:   color = style.color(.verifiedOp)
+            case .unverified: color = style.color(.unverifiedOp)
+            case .none:       color = style.color(.dimLabel)
             }
             out.append(NSAttributedString(
                 string: "\(indent)\(node.name) (\(node.pid))",
