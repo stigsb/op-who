@@ -69,7 +69,10 @@ private let knownPatternRules: [PatternRule] = [
     rule("xox[baprs]-[A-Za-z0-9-]{10,}"),
     rule("AIza[0-9A-Za-z_-]{35}"),
     rule("eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"),
-    rule("-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    // Whole PEM block (private keys AND certificates), header through footer,
+    // across the embedded newlines of a multi-line argv element. The `(?:…)?`
+    // tail is optional so a bare, body-less header still redacts.
+    rule("-----BEGIN [A-Z0-9 ]+-----(?:[\\s\\S]*?-----END [A-Z0-9 ]+-----)?"),
     rule("(?i)(bearer\\s+)[A-Za-z0-9._-]{8,}", keepPrefix: true),
     rule("(://[^/\\s:@]+:)[^/\\s@]+(?=@)", keepPrefix: true),
 ]
@@ -135,7 +138,25 @@ func redactToken(_ s: String) -> String {
 /// Redact secrets inside a single string (interpreter inline-command snippets).
 public func redactString(_ s: String) -> String { redactToken(s) }
 
+/// Longest argv argument we keep verbatim before truncating with an ellipsis.
+/// A single pasted blob or inlined file can otherwise dominate the popup and
+/// unified log. Applied after redaction, so a recognized secret collapses to
+/// the (short) placeholder before any length check.
+let maxArgvArgLength = 50
+
+private func truncateArg(_ s: String) -> String {
+    guard s.count > maxArgvArgLength else { return s }
+    return String(s.prefix(maxArgvArgLength)) + "…"
+}
+
 /// Redact secrets from an argv array. The result has the SAME count and order
 /// as the input — each token maps to itself or a redacted copy — so every
-/// position-based argv parser keeps working unchanged.
-public func redactArgv(_ argv: [String]) -> [String] { argv.map(redactToken) }
+/// position-based argv parser keeps working unchanged. Arguments longer than
+/// `maxArgvArgLength` are then truncated; `argv[0]` is exempt because its
+/// basename is load-bearing for command detection and display.
+public func redactArgv(_ argv: [String]) -> [String] {
+    argv.enumerated().map { index, token in
+        let redacted = redactToken(token)
+        return index == 0 ? redacted : truncateArg(redacted)
+    }
+}

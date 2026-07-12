@@ -43,6 +43,29 @@ struct SecretRedactionTests {
         #expect(redactKnownPatterns("-----BEGIN OPENSSH PRIVATE KEY-----") == secretRedactionPlaceholder)
     }
 
+    @Test func knownPatternsRedactWholePemBlocks() {
+        let key = """
+        -----BEGIN RSA PRIVATE KEY-----
+        MIIEpAIBAAKCAQEAwJalrXUtnFEMIK7MDENGbPxRfiCYz9qLpTvBhKmNwJalrXUt
+        nFEMIK7MDENGbPxRfiCYz9qLpTvBhKmNwJalrXUtnFEMIK7MDENGbPxRfiCY==
+        -----END RSA PRIVATE KEY-----
+        """
+        #expect(redactKnownPatterns(key) == secretRedactionPlaceholder)
+
+        let cert = """
+        -----BEGIN CERTIFICATE-----
+        MIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQsFADBaMQswCQYDVQQGEwJJ
+        RTESMBAGA1UEChMJQmFsdGltb3JlMRMwEQYDVQQLEwpDeWJlclRydXN0MSIwIA==
+        -----END CERTIFICATE-----
+        """
+        #expect(redactKnownPatterns(cert) == secretRedactionPlaceholder)
+    }
+
+    @Test func pemBlockInsideFlagKeepsFlagPrefix() {
+        let arg = "--key=-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIABC\n-----END EC PRIVATE KEY-----"
+        #expect(redactKnownPatterns(arg) == "--key=" + secretRedactionPlaceholder)
+    }
+
     @Test func knownPatternsKeepBearerAndUrlPrefix() {
         #expect(redactKnownPatterns("Authorization: Bearer abcdef123456")
                 == "Authorization: Bearer " + secretRedactionPlaceholder)
@@ -111,6 +134,33 @@ struct SecretRedactionTests {
     @Test func entropyLayerStillRedactsBlobAfterFlagEquals() {
         let blob = "wJalrXUtnFEMIK7MDENGbPxRfiCYz9qLpTvBhKmN"
         #expect(redactHighEntropy("--token=" + blob) == "--token=" + secretRedactionPlaceholder)
+    }
+
+    @Test func redactArgvTruncatesLongArguments() {
+        let long = String(repeating: "a", count: 120)
+        let out = redactArgv(["op", long])
+        #expect(out[1] == String(repeating: "a", count: maxArgvArgLength) + "…")
+        #expect(out[1].count == maxArgvArgLength + 1)
+    }
+
+    @Test func redactArgvExemptsArgv0FromTruncation() {
+        let longPath = "/opt/homebrew/Cellar/1password-cli/2.31.0/bin/op-longer-than-fifty"
+        #expect(longPath.count > maxArgvArgLength)
+        let out = redactArgv([longPath, "read"])
+        #expect(out[0] == longPath)
+    }
+
+    @Test func redactArgvKeepsShortArgumentsVerbatim() {
+        let input = ["op", "read", "op://Personal/GitHub/token"]
+        #expect(redactArgv(input) == input)
+    }
+
+    @Test func redactArgvRedactsBeforeTruncating() {
+        // A long PEM key argument collapses to the placeholder, not a truncated
+        // slice of the key body.
+        let key = "-----BEGIN RSA PRIVATE KEY-----\n" + String(repeating: "MIIEpQ", count: 30) + "\n-----END RSA PRIVATE KEY-----"
+        let out = redactArgv(["ssh-add", key])
+        #expect(out[1] == secretRedactionPlaceholder)
     }
 
     @Test func redactArgvHandlesEmptyInput() {
