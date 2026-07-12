@@ -295,4 +295,31 @@ struct OverlayPanelSampleEntryTests {
         #expect(stack != nil)
         #expect((stack?.arrangedSubviews.count ?? 0) >= 2)  // header + entry
     }
+
+    /// Regression: the panel is sized `fittingSize + 24` for breathing room,
+    /// but the content must NOT stretch to fill that surplus. A `==` bottom
+    /// pin used to force the vertical stack taller than its fitting height, and
+    /// NSStackView distributed the slack as gaps between rows that shifted
+    /// around as the font size changed (visible "empty lines" in the preview).
+    /// The content should keep its fitting height and sit anchored to the top.
+    @Test("content is not stretched to fill surplus panel height")
+    func contentNotStretchedByOversizedPanel() {
+        let panel = OverlayPanel()
+        panel.style = PopupStyle(uiFontName: nil, monoFontName: "Menlo",
+                                 baseSize: 14, overrides: [:])
+        let content = panel.buildContentView(entries: [OverlayPanel.sampleEntry()])
+        let fitting = content.fittingSize
+        let wrapper = panel.wrapInOpaqueBackground(content)
+
+        // Mirror show(): panel is 24pt taller / 32pt wider than the content.
+        wrapper.frame = NSRect(x: 0, y: 0,
+                               width: fitting.width + 32,
+                               height: fitting.height + 24)
+        wrapper.layoutSubtreeIfNeeded()
+
+        // The content keeps its fitting height (no vertical stretch) ...
+        #expect(abs(content.frame.height - fitting.height) < 0.5)
+        // ... and is anchored to the top of the wrapper (surplus falls below).
+        #expect(abs(content.frame.maxY - wrapper.frame.maxY) < 0.5)
+    }
 }

@@ -229,15 +229,23 @@ public class OverlayPanel {
     /// wrapping the content in a view that paints `windowBackgroundColor`
     /// makes every pixel of the popup opaque — which is also the background
     /// the WCAG contrast audit in OverlayColors assumes.
-    private func wrapInOpaqueBackground(_ content: NSView) -> NSView {
+    ///
+    /// Internal (not private) so a regression test can verify the content is
+    /// anchored to the top and not stretched to fill surplus panel height.
+    func wrapInOpaqueBackground(_ content: NSView) -> NSView {
         let background = OpaqueBackgroundView()
         content.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(content)
+        // Anchor the content to the top and let the opaque background own any
+        // surplus panel height (the panel is sized fitting+24 for breathing
+        // room). A `==` bottom pin would instead stretch the vertical stack
+        // past its fitting size, and NSStackView distributes that slack as
+        // gaps between rows — which shifted around as the font size changed.
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: background.trailingAnchor),
             content.topAnchor.constraint(equalTo: background.topAnchor),
-            content.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: background.bottomAnchor),
         ])
         return background
     }
