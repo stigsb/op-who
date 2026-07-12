@@ -31,7 +31,8 @@ into its own tab.
 - **Preview:** a **Preview…** button pops the real `OverlayPanel` with a sample
   entry so colors/fonts aren't chosen blind.
 - **Window:** move to a tabbed layout (`NSTabView`, top tabs) with **General**,
-  **Style**, and **Rules** tabs.
+  **Appearance**, and **Rules** tabs. All visual settings consolidate into the
+  **Appearance** tab; General keeps only non-visual options.
 
 ## Non-goals
 
@@ -42,9 +43,6 @@ into its own tab.
   defaults in `OverlayColors`.
 - No full `NSFontPanel` — family popup + base-size stepper is enough.
 - No per-well reset (only a global Restore defaults) in v1.
-- The System/Light/Dark **appearance override** and **dense popup** toggle stay
-  in the General tab (unchanged `GeneralPane`); "Style" is named to avoid
-  colliding with that existing "Appearance" control.
 
 ## Architecture
 
@@ -118,42 +116,50 @@ test. `PopupColorRole` gets a `defaultColor` mapping back to the corresponding
 ### 4. Settings window — tabbed layout
 
 `ConfigWindowController` builds an `NSTabView` (top tabs) instead of the single
-scroll column:
+scroll column. All visual settings consolidate into the Appearance tab:
 
-- **General** — `generalPane.view` (startup, dense popup, appearance override),
-  unchanged.
-- **Style** — new `PopupStylePane.view`.
+- **General** — `generalPane.view`, now holding only **Run on startup**.
+- **Appearance** — new `AppearancePane.view`: dense popup, light/dark override,
+  fonts, base size, colors, Restore defaults, Preview.
 - **Rules** — `rulesPane.view`, moved verbatim out of the old shared scroll
   column. It keeps its own internal table scrolling.
 
+`GeneralPane` sheds its dense-popup checkbox and appearance segmented control;
+those move to `AppearancePane` (which owns the `settings.densePopup` and
+`settings.appearance` wiring plus the `applyAppearance` call). `GeneralPane`
+retains the `SMAppService` startup logic and `refreshState`.
+
 The `Cmd-W` handling and the undo-enabled field editor on `ConfigWindow` are
 preserved. `resetScrollToTop` applies to whichever tab owns a scroll view (the
-Style tab wraps its content in a scroll view; Rules already scrolls).
+Appearance tab wraps its content in a scroll view; Rules already scrolls).
 
-### 5. `PopupStylePane` — new file in `Sources/op-who`
+### 5. `AppearancePane` — new file in `Sources/op-who`
 
-A stacked section, wrapped in a scroll view (color grid can be tall):
+A stacked section, wrapped in a scroll view (color grid can be tall). Groups,
+top to bottom:
 
-- **UI font** and **Mono font**: `NSPopUpButton` per role listing available
-  font families, with "System default" as the first item (⇒ store nil).
-- **Base size**: `NSStepper` + value label, range 9–24.
+- **Popup behavior**: the **Dense popup** checkbox (moved from `GeneralPane`).
+- **Appearance**: the System/Light/Dark segmented control (moved from
+  `GeneralPane`), still calling `applyAppearance` on change.
+- **Fonts**: **UI font** and **Mono font** `NSPopUpButton`s listing available
+  font families, with "System default" as the first item (⇒ store nil); a
+  **Base size** `NSStepper` + value label, range 9–24.
 - **Colors**: a labeled grid of `NSColorWell`s, one per `PopupColorRole`, each
   initialized to the current effective color. Editing a well writes a hex
   override; the wells reflect current overrides on open.
 - **Restore defaults**: clears `popupColorOverrides` (and resets the wells to
-  default effective colors). Font/size are left as-is (their own "System
+  default effective colors). Fonts/size are left as-is (their own "System
   default" popup item and stepper cover reset).
 - **Preview…**: constructs a throwaway `OverlayPanel`, sets its `style` from the
-  current (possibly unsaved-in-UI-but-written-to-settings) values, and calls
-  `show` with a representative sample `ProcessEntry` near the screen center.
-  Each control writes its value to `AppSettings` immediately (same pattern as
-  the existing dense/appearance toggles), so Preview reads straight from
-  settings.
+  current values, and calls `show` with a representative sample `ProcessEntry`
+  near the screen center. Each control writes its value to `AppSettings`
+  immediately (same pattern as the existing dense/appearance toggles), so
+  Preview reads straight from settings.
 
 ## Data flow
 
 ```
-Settings UI (PopupStylePane)  ──writes──▶  AppSettings (UserDefaults)
+Settings UI (AppearancePane)  ──writes──▶  AppSettings (UserDefaults)
                                                  │
 OnePasswordWatcher, before show ─reads─▶ PopupStyle(settings:) ─▶ OverlayPanel.style
                                                  │
