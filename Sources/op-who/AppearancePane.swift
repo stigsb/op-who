@@ -26,6 +26,7 @@ final class AppearancePane: NSObject {
     // Colors: one well per role, in declaration order, editing one appearance
     // variant at a time (selected by `colorVariantControl`).
     private var colorWells: [PopupColorRole: NSColorWell] = [:]
+    private var colorBadges: [PopupColorRole: NSButton] = [:]
     private let colorVariantControl = NSSegmentedControl(
         labels: ["Light", "Dark"], trackingMode: .selectOne, target: nil, action: nil
     )
@@ -142,7 +143,7 @@ final class AppearancePane: NSObject {
     /// ends in a low-hugging spacer that absorbs slack so the pills stay put
     /// at the left instead of drifting as the pane resizes.
     private func colorGrid() -> NSView {
-        let pairsPerRow = 4
+        let pairsPerRow = 3
         var rows: [NSView] = []
         var cells: [NSView] = []
         for role in PopupColorRole.allCases {
@@ -168,7 +169,7 @@ final class AppearancePane: NSObject {
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
         name.widthAnchor.constraint(equalToConstant: 86).isActive = true
-        let cell = NSStackView(views: [name, makeColorWell(for: role)])
+        let cell = NSStackView(views: [name, makeColorWell(for: role), makeBadge(for: role)])
         cell.orientation = .horizontal
         cell.alignment = .centerY
         cell.spacing = 6
@@ -215,6 +216,56 @@ final class AppearancePane: NSObject {
         well.tag = colorTag(for: role)
         colorWells[role] = well
         return well
+    }
+
+    /// Build and register the WCAG contrast badge for a role's well. Shows the
+    /// ratio vs. the popup background in the edited variant's appearance;
+    /// enabled (clickable) only when failing — click snaps to the nearest
+    /// passing color. Guide, don't block: failing colors stay selectable.
+    private func makeBadge(for role: PopupColorRole) -> NSButton {
+        let badge = NSButton(title: "", target: self, action: #selector(badgeClicked(_:)))
+        badge.isBordered = false
+        badge.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        badge.tag = colorTag(for: role)
+        badge.toolTip = "WCAG contrast vs. the popup background. "
+            + "Click a failing badge to snap to the nearest passing color."
+        badge.setContentHuggingPriority(.required, for: .horizontal)
+        colorBadges[role] = badge
+        refreshBadge(for: role)
+        return badge
+    }
+
+    /// The popup background as sRGB components in the edited variant's
+    /// appearance (white in light, ~#1E1E1E in dark).
+    private func backgroundSRGB() -> (r: Double, g: Double, b: Double) {
+        OverlayColors.srgb(
+            OverlayColors.resolved(OverlayColors.background, in: colorVariant.appearanceName))
+    }
+
+    private static let requiredRatio = 4.5
+
+    private func refreshBadge(for role: PopupColorRole) {
+        guard let badge = colorBadges[role], let well = colorWells[role] else { return }
+        let fg = OverlayColors.srgb(
+            OverlayColors.resolved(well.color, in: colorVariant.appearanceName))
+        let ratio = contrastRatio(fg, backgroundSRGB())
+        let passing = ratio >= Self.requiredRatio
+        badge.title = String(format: "%.1f %@", ratio, passing ? "✓" : "✗")
+        badge.contentTintColor = passing ? .secondaryLabelColor : .systemOrange
+        badge.isEnabled = !passing
+    }
+
+    private func refreshAllBadges() {
+        PopupColorRole.allCases.forEach { refreshBadge(for: $0) }
+    }
+
+    @objc private func badgeClicked(_ sender: NSButton) {
+        guard let role = role(forTag: sender.tag), let well = colorWells[role] else { return }
+        let fg = OverlayColors.srgb(
+            OverlayColors.resolved(well.color, in: colorVariant.appearanceName))
+        let snapped = snapToContrast(fg, against: backgroundSRGB(), ratio: Self.requiredRatio)
+        well.color = NSColor(srgbRed: snapped.r, green: snapped.g, blue: snapped.b, alpha: 1)
+        colorChanged(well)   // persist + badge refresh via the normal path
     }
 
     private func restoreRow() -> NSView {
@@ -324,6 +375,7 @@ final class AppearancePane: NSObject {
         var overrides = settings.popupColorOverrides
         overrides[PopupStyle.overrideKey(role, colorVariant)] = sender.color.popupHexString
         settings.popupColorOverrides = overrides
+        refreshBadge(for: role)
         refreshPreviewIfShowing()
     }
 
@@ -341,6 +393,7 @@ final class AppearancePane: NSObject {
         for (role, well) in colorWells {
             well.color = style.color(role, variant: colorVariant)
         }
+        refreshAllBadges()
     }
 
     @objc private func showPreview(_ sender: NSButton) {

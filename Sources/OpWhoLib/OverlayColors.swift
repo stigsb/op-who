@@ -60,7 +60,7 @@ public enum OverlayColors {
     /// color it renders as under `name`. Used to capture a default's light or
     /// dark component so one variant can be overridden while the other keeps
     /// its WCAG default.
-    static func resolved(_ color: NSColor, in name: NSAppearance.Name) -> NSColor {
+    public static func resolved(_ color: NSColor, in name: NSAppearance.Name) -> NSColor {
         var comps = (r: 0.0, g: 0.0, b: 0.0)
         let appearance = NSAppearance(named: name) ?? NSAppearance.currentDrawing()
         appearance.performAsCurrentDrawingAppearance {

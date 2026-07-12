@@ -30,7 +30,7 @@ public enum PopupColorRole: String, CaseIterable {
 public enum ColorVariant: String, CaseIterable {
     case light, dark
 
-    var appearanceName: NSAppearance.Name { self == .dark ? .darkAqua : .aqua }
+    public var appearanceName: NSAppearance.Name { self == .dark ? .darkAqua : .aqua }
 }
 
 /// Which of the popup's two font families a label uses.
