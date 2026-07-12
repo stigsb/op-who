@@ -36,23 +36,20 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private var testSheet: TestPredicateSheetController?
 
     // Detail form controls.
-    private let nameField = NSTextField()
     /// NSPredicate-format text view. Multi-line because real-world rule
     /// predicates with IN-sets and AND-chains spill past one line fast.
     /// The subclass extends `rangeForUserCompletion` so dotted keypaths
     /// (e.g. `triggerArgv.@count`) complete as one word.
     private let predicateView = PredicateTextView()
-    /// Drag-handle below the predicate field. Dragging it changes the
-    /// scroll view's height so long predicates have room without taking
-    /// permanent vertical real estate from the rest of the editor.
-    private let predicateResizeGrip = ResizeGripView()
     /// Height of the predicate scroll view. Held as a stored constraint
-    /// so the resize grip can mutate it.
+    /// so the editor can auto-grow to fit its content.
     private var predicateScrollHeight: NSLayoutConstraint!
     /// Minimum height for the predicate scroll view in points. Keeps a
-    /// one-line predicate readable; the user can drag the grip up
-    /// against this floor but not past it.
+    /// one-line predicate readable when the field is empty.
     private let predicateMinHeight: CGFloat = 36
+    /// Cap on the auto-grown predicate editor: it expands to fit the text
+    /// up to this many lines, then stops growing and scrolls.
+    private let predicateMaxLines = 20
     /// Set while `loadDetailFromSelection` is writing the predicate field
     /// programmatically, so the textDidChange notification doesn't
     /// auto-trigger the completion popup on a load.
@@ -75,6 +72,14 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// parse; empty (and hidden) when the predicate is valid.
     private let predicateError = NSTextField(labelWithString: "")
     private let templateField = NSTextField()
+    /// Secondary help line under the Template field listing the available
+    /// `{placeholder}` tokens. Lives outside the field so the field's
+    /// intrinsic width stays small (a long placeholder string would force
+    /// the whole Settings window wider on this tab).
+    private let templateHelp = NSTextField(labelWithString:
+        "Placeholders: {process}, {subcommand}, {argv}, {cwd}, {op_uri}, {op_phrase}, " +
+        "{plugin_remote}, {repo}, {source}, {marketplace}, {argv[N]}"
+    )
     private let commentView = NSTextView()
     private let commentScroll = NSScrollView()
     /// Live example of what the current draft rule would render in the
@@ -100,7 +105,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// and comment text views aren't NSControls, so they're toggled
     /// separately in `setEditable`.
     private var editableControls: [NSControl] {
-        [nameField, templateField, kindPopup, replacesActorCheckbox, isWarningCheckbox]
+        [templateField, kindPopup, replacesActorCheckbox, isWarningCheckbox]
     }
 
     private(set) lazy var view: NSView = makeContentView()
@@ -208,14 +213,9 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         originCol.maxWidth = 80
         tableView.addTableColumn(originCol)
 
-        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        nameCol.title = "Name"
-        nameCol.width = 200
-        tableView.addTableColumn(nameCol)
-
         let whenCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("when"))
         whenCol.title = "When"
-        whenCol.width = 260
+        whenCol.width = 320
         tableView.addTableColumn(whenCol)
 
         let thenCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("then"))
@@ -286,8 +286,13 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         grid.rowSpacing = 6
         grid.columnSpacing = 8
 
-        configureField(nameField, placeholder: "Display name")
-        configureField(templateField, placeholder: "Template — {process}, {subcommand}, {argv}, {cwd}, {op_uri}, {op_phrase}, {plugin_remote}, {repo}, {source}, {marketplace}, {argv[N]}")
+        configureField(templateField, placeholder: "e.g. is signing a commit with {process}")
+
+        templateHelp.font = NSFont.systemFont(ofSize: 11)
+        templateHelp.textColor = .secondaryLabelColor
+        templateHelp.lineBreakMode = .byWordWrapping
+        templateHelp.maximumNumberOfLines = 3
+        templateHelp.preferredMaxLayoutWidth = 460
 
         kindPopup.addItems(withTitles: [
             RequestKind.onePasswordCLI.rawValue,
@@ -326,10 +331,10 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         builtInNotice.textColor = .secondaryLabelColor
         builtInNotice.isHidden = true
 
-        grid.addRow(with: [label("Name"), nameField])
         grid.addRow(with: [label("Predicate"), makePredicateEditorRow()])
         grid.addRow(with: [NSView(), predicateError])
         grid.addRow(with: [label("Template"), templateField])
+        grid.addRow(with: [NSView(), templateHelp])
         grid.addRow(with: [label("Preview"), templatePreview])
         grid.addRow(with: [label("Comment"), commentScroll])
         grid.addRow(with: [label("Kind"), kindPopup])
@@ -395,26 +400,15 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func makePredicateEditorRow() -> NSView {
-        // Editor column: predicate scroll on top, drag grip directly
-        // below. The grip spans the same width so the user can drag from
-        // anywhere along the bottom edge.
-        let editorColumn = NSStackView(views: [predicateScroll, predicateResizeGrip])
-        editorColumn.orientation = .vertical
-        editorColumn.alignment = .leading
-        editorColumn.spacing = 0
-        editorColumn.translatesAutoresizingMaskIntoConstraints = false
-        predicateResizeGrip.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            predicateResizeGrip.leadingAnchor.constraint(equalTo: editorColumn.leadingAnchor),
-            predicateResizeGrip.trailingAnchor.constraint(equalTo: predicateScroll.trailingAnchor),
-        ])
-
+        // The editor auto-grows to fit its content (up to `predicateMaxLines`),
+        // so there's no manual drag handle: the scroll view sits directly
+        // beside the Test button.
         let row = NSStackView()
         row.orientation = .horizontal
         row.alignment = .top
         row.spacing = 6
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.addArrangedSubview(editorColumn)
+        row.addArrangedSubview(predicateScroll)
 
         let testButton = NSButton(title: "Test…", target: self, action: #selector(testPredicate(_:)))
         testButton.toolTip = "Evaluate this predicate against every record in the recent-requests ring buffer"
@@ -440,26 +434,35 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         predicateScroll.hasVerticalScroller = true
         predicateScroll.documentView = predicateView
         predicateScroll.translatesAutoresizingMaskIntoConstraints = false
-        predicateScrollHeight = predicateScroll.heightAnchor.constraint(equalToConstant: 72)
+        predicateScrollHeight = predicateScroll.heightAnchor.constraint(equalToConstant: predicateMinHeight)
         predicateScrollHeight.isActive = true
-        predicateScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
-
-        predicateResizeGrip.onDragDelta = { [weak self] delta in
-            guard let self = self else { return }
-            // NSEvent.deltaY for mouse-tracking events is in *screen*
-            // coordinates — down is positive — regardless of the view's
-            // flipped-ness. Add the delta so dragging down grows the
-            // field. Clamp at `predicateMinHeight` so the editor never
-            // collapses to a zero-row sliver.
-            let proposed = self.predicateScrollHeight.constant + delta
-            self.predicateScrollHeight.constant = max(self.predicateMinHeight, proposed)
-        }
+        predicateScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 460).isActive = true
 
         // Install the syntax highlighter on the text storage. The
         // highlighter watches edits and re-applies foreground colours
         // (plus an orange underline for unknown keypaths) on every
         // change.
         predicateHighlighter.install(on: predicateView)
+    }
+
+    /// Resize the predicate scroll view to fit its text: one line when
+    /// empty, growing with the content up to `predicateMaxLines`, past
+    /// which the view stops growing and scrolls. Called on load and after
+    /// every edit so the editor tracks what the user types.
+    private func adjustPredicateHeight() {
+        guard let layoutManager = predicateView.layoutManager,
+              let container = predicateView.textContainer,
+              let font = predicateView.font else { return }
+        // Force layout so `usedRect` reflects the current text.
+        layoutManager.ensureLayout(for: container)
+        let inset = predicateView.textContainerInset.height * 2
+        let contentHeight = layoutManager.usedRect(for: container).height + inset
+        let lineHeight = layoutManager.defaultLineHeight(for: font)
+        let maxHeight = ceil(lineHeight * CGFloat(predicateMaxLines)) + inset
+        let target = min(maxHeight, max(predicateMinHeight, ceil(contentHeight)))
+        if abs(predicateScrollHeight.constant - target) > 0.5 {
+            predicateScrollHeight.constant = target
+        }
     }
 
     private func configureCommentView() {
@@ -473,7 +476,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         commentScroll.documentView = commentView
         commentScroll.translatesAutoresizingMaskIntoConstraints = false
         commentScroll.heightAnchor.constraint(equalToConstant: 56).isActive = true
-        commentScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+        commentScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 460).isActive = true
     }
 
     private func configureField(_ field: NSTextField, placeholder: String) {
@@ -481,7 +484,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         field.target = self
         field.action = #selector(detailChanged(_:))
         field.translatesAutoresizingMaskIntoConstraints = false
-        field.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
+        field.widthAnchor.constraint(greaterThanOrEqualToConstant: 460).isActive = true
     }
 
     private func label(_ text: String) -> NSTextField {
@@ -524,9 +527,6 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
                 cell.textField?.stringValue = (rule.builtInID == nil) ? "User" : "Built-in"
                 cell.textField?.font = NSFont.systemFont(ofSize: 11)
                 cell.textField?.textColor = (rule.builtInID == nil) ? .labelColor : .secondaryLabelColor
-            case "name":
-                cell.textField?.stringValue = rule.name
-                cell.textField?.textColor = rule.enabled ? .labelColor : .disabledControlTextColor
             case "when":
                 cell.textField?.stringValue = rule.predicate
                 cell.textField?.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -783,7 +783,6 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         }
 
         var rule = store.userRules[idx]
-        rule.name = nameField.stringValue
         rule.predicate = predicateText
         rule.template = templateField.stringValue
         rule.comment = commentView.string.isEmpty ? nil : commentView.string
@@ -967,8 +966,8 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             setEditable(true)
             return
         }
-        nameField.stringValue = rule.name
         predicateView.string = rule.predicate
+        adjustPredicateHeight()
         templateField.stringValue = rule.template
         commentView.string = rule.comment ?? ""
         replacesActorCheckbox.state = rule.replacesActor ? .on : .off
@@ -992,8 +991,8 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func clearDetail() {
-        nameField.stringValue = ""
         predicateView.string = ""
+        adjustPredicateHeight()
         predicateError.stringValue = ""
         predicateError.isHidden = true
         templateField.stringValue = ""
@@ -1035,6 +1034,8 @@ extension RulesPane: NSTextViewDelegate {
         commitDetail()
         guard let textView = notification.object as? NSTextView,
               textView === predicateView else { return }
+        // Grow/shrink the editor to fit what the user just typed.
+        adjustPredicateHeight()
         let nsString = predicateView.string as NSString
         let newLength = nsString.length
         let grew = newLength > previousPredicateLength
