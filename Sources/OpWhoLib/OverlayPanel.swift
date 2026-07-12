@@ -161,33 +161,6 @@ public class OverlayPanel {
 
         panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
         panel.orderFrontRegardless()
-        hideTitlebarBackdrop(in: panel)
-    }
-
-    /// macOS 26's titlebar hosts a glass backdrop (a `CABackdropLayer`-backed
-    /// view) that samples the pixels *behind* the window and composites them
-    /// over the titlebar strip — above the content view, so an opaque popup
-    /// background can't cover it. On a floating panel the sample also lags,
-    /// leaving a frozen ghost of whatever was behind the popup when it
-    /// appeared. `titlebarAppearsTransparent` hides the titlebar background
-    /// but not this backdrop, so hide it by hand. Runs after the panel is
-    /// ordered front (the backdrop's layer only exists once displayed); if
-    /// the private layer class ever changes, nothing matches and the popup
-    /// keeps today's (cosmetic-only) artifact.
-    private func hideTitlebarBackdrop(in panel: NSPanel) {
-        guard let frameView = panel.contentView?.superview else { return }
-        hideBackdropViews(in: frameView, skipping: panel.contentView)
-    }
-
-    private func hideBackdropViews(in view: NSView, skipping content: NSView?) {
-        for sub in view.subviews where sub !== content {
-            if let layer = sub.layer,
-               String(describing: type(of: layer)) == "CABackdropLayer" {
-                sub.isHidden = true
-            } else {
-                hideBackdropViews(in: sub, skipping: content)
-            }
-        }
     }
 
     public func dismiss() {
