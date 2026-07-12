@@ -23,13 +23,25 @@ final class AppearancePane: NSObject {
     private let sizeStepper = NSStepper()
     private let sizeLabel = NSTextField(labelWithString: "")
 
-    // Colors: one well per role, in declaration order.
+    // Colors: one well per role, in declaration order, editing one appearance
+    // variant at a time (selected by `colorVariantControl`).
     private var colorWells: [PopupColorRole: NSColorWell] = [:]
+    private let colorVariantControl = NSSegmentedControl(
+        labels: ["Light", "Dark"], trackingMode: .selectOne, target: nil, action: nil
+    )
+    /// Which appearance variant the color wells currently edit. Defaults to the
+    /// app's current effective appearance so the wells open on what the user
+    /// is actually looking at.
+    private var colorVariant: ColorVariant = AppearancePane.currentVariant()
 
     // Preview.
     private var previewPanel: OverlayPanel?
 
     private static let systemDefaultTitle = "System default"
+
+    private static func currentVariant() -> ColorVariant {
+        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+    }
 
     private(set) lazy var view: NSView = makeContentView()
 
@@ -61,6 +73,8 @@ final class AppearancePane: NSObject {
         sizeStepper.integerValue = Int(settings.popupFontBaseSize.rounded())
         updateSizeLabel()
 
+        colorVariantControl.selectedSegment = (colorVariant == .dark) ? 1 : 0
+
         let stack = NSStackView(views: [
             sectionLabel("Popup"),
             denseCheckbox,
@@ -72,6 +86,7 @@ final class AppearancePane: NSObject {
             labeledRow("Base size:", sizeRow()),
             spacer(),
             sectionLabel("Colors"),
+            colorVariantRow(),
             colorGrid(),
             restoreRow(),
             spacer(),
@@ -172,10 +187,26 @@ final class AppearancePane: NSObject {
         return row
     }
 
-    /// Build and register the color well for a role.
+    /// The "Editing: Light | Dark" selector that chooses which appearance the
+    /// color wells edit. In System mode the popup uses whichever the OS is, so
+    /// both variants are worth setting; a forced Light/Dark setting uses one.
+    private func colorVariantRow() -> NSView {
+        let label = NSTextField(labelWithString: "Editing:")
+        let hint = NSTextField(labelWithString: "— colors for the popup in this appearance")
+        hint.font = NSFont.systemFont(ofSize: 10)
+        hint.textColor = .tertiaryLabelColor
+        let row = NSStackView(views: [label, colorVariantControl, hint])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
+    }
+
+    /// Build and register the color well for a role, showing the effective
+    /// color for the currently-selected appearance variant.
     private func makeColorWell(for role: PopupColorRole) -> NSColorWell {
         let well = NSColorWell()
-        well.color = PopupStyle(settings: settings).color(role)
+        well.color = PopupStyle(settings: settings).color(role, variant: colorVariant)
         well.translatesAutoresizingMaskIntoConstraints = false
         well.widthAnchor.constraint(equalToConstant: 38).isActive = true
         well.heightAnchor.constraint(equalToConstant: 20).isActive = true
@@ -217,6 +248,8 @@ final class AppearancePane: NSObject {
         monoFontPopup.action = #selector(monoFontChanged(_:))
         sizeStepper.target = self
         sizeStepper.action = #selector(sizeChanged(_:))
+        colorVariantControl.target = self
+        colorVariantControl.action = #selector(colorVariantChanged(_:))
     }
 
     private func populateFontPopup(_ popup: NSPopUpButton, selected: String?) {
@@ -253,42 +286,73 @@ final class AppearancePane: NSObject {
 
     @objc private func toggleDense(_ sender: NSButton) {
         settings.densePopup = (sender.state == .on)
+        refreshPreviewIfShowing()
     }
 
     @objc private func changeAppearance(_ sender: NSSegmentedControl) {
         let a: AppAppearance = [.system, .light, .dark][sender.selectedSegment]
         settings.appearance = a
         applyAppearance(a)
+        refreshPreviewIfShowing()
     }
 
     @objc private func uiFontChanged(_ sender: NSPopUpButton) {
         settings.popupUIFontName = selectedFontName(sender)
+        refreshPreviewIfShowing()
     }
 
     @objc private func monoFontChanged(_ sender: NSPopUpButton) {
         settings.popupMonoFontName = selectedFontName(sender)
+        refreshPreviewIfShowing()
     }
 
     @objc private func sizeChanged(_ sender: NSStepper) {
         settings.popupFontBaseSize = Double(sender.integerValue)
         updateSizeLabel()
+        refreshPreviewIfShowing()
+    }
+
+    /// Flip which appearance variant the wells edit, and reload them to show
+    /// that variant's current colors.
+    @objc private func colorVariantChanged(_ sender: NSSegmentedControl) {
+        colorVariant = (sender.selectedSegment == 1) ? .dark : .light
+        reloadColorWells()
     }
 
     @objc private func colorChanged(_ sender: NSColorWell) {
         guard let role = role(forTag: sender.tag) else { return }
         var overrides = settings.popupColorOverrides
-        overrides[role.rawValue] = sender.color.popupHexString
+        overrides[PopupStyle.overrideKey(role, colorVariant)] = sender.color.popupHexString
         settings.popupColorOverrides = overrides
+        refreshPreviewIfShowing()
     }
 
     @objc private func restoreDefaults(_ sender: NSButton) {
         settings.popupColorOverrides = [:]
+        reloadColorWells()
+        colorWells.values.forEach { $0.deactivate() }
+        refreshPreviewIfShowing()
+    }
+
+    /// Reset every well to the effective color for the current variant (its
+    /// override, or the WCAG default resolved in that appearance).
+    private func reloadColorWells() {
+        let style = PopupStyle(settings: settings)
         for (role, well) in colorWells {
-            well.color = role.defaultColor
+            well.color = style.color(role, variant: colorVariant)
         }
     }
 
     @objc private func showPreview(_ sender: NSButton) {
+        presentPreview()
+    }
+
+    @objc private func hidePreview(_ sender: NSButton) {
+        previewPanel?.dismiss()
+        previewPanel = nil
+    }
+
+    private func presentPreview() {
         previewPanel?.dismiss()
         let panel = OverlayPanel()
         panel.densePopup = settings.densePopup
@@ -297,9 +361,9 @@ final class AppearancePane: NSObject {
         previewPanel = panel
     }
 
-    @objc private func hidePreview(_ sender: NSButton) {
-        previewPanel?.dismiss()
-        previewPanel = nil
+    /// If a preview is on screen, rebuild it so edits show live.
+    private func refreshPreviewIfShowing() {
+        if previewPanel != nil { presentPreview() }
     }
 
     /// Called by the window controller when Settings closes, so neither a

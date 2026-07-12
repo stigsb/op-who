@@ -55,7 +55,9 @@ public final class AppSettings {
         set { defaults.set(Self.clampSize(newValue), forKey: Key.popupFontBaseSize) }
     }
 
-    /// Per-role popup color overrides: role key → "#RRGGBB". Absent ⇒ default.
+    /// Per-role, per-appearance popup color overrides: key ⇒ "#RRGGBB". The key
+    /// is `PopupStyle.overrideKey(role, variant)` (e.g. "claude.dark"). An
+    /// absent key ⇒ the WCAG default for that role/variant.
     public var popupColorOverrides: [String: String] {
         get { (defaults.dictionary(forKey: Key.popupColorOverrides) as? [String: String]) ?? [:] }
         set { defaults.set(newValue, forKey: Key.popupColorOverrides) }

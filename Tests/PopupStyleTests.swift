@@ -16,32 +16,60 @@ struct PopupStyleColorTests {
         }
     }
 
-    @Test("a valid hex override wins over the default")
-    func overrideColor() {
+    @Test("an override wins for its variant, the other variant keeps the default")
+    func overridePerVariant() {
         let style = PopupStyle(
             uiFontName: nil, monoFontName: nil, baseSize: 12,
-            overrides: ["claude": "#112233"]
+            overrides: [PopupStyle.overrideKey(.claude, .light): "#112233"]
         )
-        let c = style.color(.claude)
-        #expect(srgb(c) == srgb(NSColor(srgbRed: 0x11/255.0, green: 0x22/255.0, blue: 0x33/255.0, alpha: 1)))
+        // The overridden (light) variant returns the override.
+        #expect(srgb(style.color(.claude, variant: .light))
+                == srgb(NSColor(srgbRed: 0x11 / 255.0, green: 0x22 / 255.0, blue: 0x33 / 255.0, alpha: 1)))
+        // The un-overridden (dark) variant keeps the WCAG default (in dark).
+        #expect(srgb(style.color(.claude, variant: .dark))
+                == srgb(OverlayColors.resolved(PopupColorRole.claude.defaultColor, in: .darkAqua)))
+    }
+
+    @Test("dynamic color resolves the correct override per appearance")
+    func dynamicColorPerAppearance() {
+        let style = PopupStyle(
+            uiFontName: nil, monoFontName: nil, baseSize: 12,
+            overrides: [
+                PopupStyle.overrideKey(.branch, .light): "#101010",
+                PopupStyle.overrideKey(.branch, .dark): "#F0F0F0",
+            ]
+        )
+        let dyn = style.color(.branch)
+        var lightHex = "", darkHex = ""
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+            lightHex = (dyn.usingColorSpace(.sRGB) ?? dyn).popupHexString
+        }
+        NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+            darkHex = (dyn.usingColorSpace(.sRGB) ?? dyn).popupHexString
+        }
+        #expect(lightHex == "#101010")
+        #expect(darkHex == "#F0F0F0")
     }
 
     @Test("an invalid hex override falls back to the default")
     func invalidOverride() {
         let style = PopupStyle(
             uiFontName: nil, monoFontName: nil, baseSize: 12,
-            overrides: ["ssh": "not-a-color"]
+            overrides: [PopupStyle.overrideKey(.ssh, .light): "not-a-color"]
         )
         #expect(srgb(style.color(.ssh)) == srgb(PopupColorRole.ssh.defaultColor))
     }
 
-    @Test("hex round-trips through NSColor helpers")
+    @Test("hex round-trips and rejects malformed input")
     func hexRoundTrip() {
         let c = NSColor(popupHex: "#4A2B99")
         #expect(c != nil)
         #expect(c?.popupHexString == "#4A2B99")
         #expect(NSColor(popupHex: "zzz") == nil)
         #expect(NSColor(popupHex: "#12345") == nil)   // wrong length
+        #expect(NSColor(popupHex: "+12345") == nil)   // signed
+        #expect(NSColor(popupHex: "-12345") == nil)   // signed
+        #expect(NSColor(popupHex: "12345g") == nil)   // non-hex char
     }
 }
 

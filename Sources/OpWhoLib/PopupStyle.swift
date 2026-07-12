@@ -24,6 +24,15 @@ public enum PopupColorRole: String, CaseIterable {
     }
 }
 
+/// Light vs dark variant of a role's color. In System appearance the popup
+/// renders whichever the OS currently is; a forced Light/Dark setting pins it.
+/// Each variant is overridden independently.
+public enum ColorVariant: String, CaseIterable {
+    case light, dark
+
+    var appearanceName: NSAppearance.Name { self == .dark ? .darkAqua : .aqua }
+}
+
 /// Which of the popup's two font families a label uses.
 public enum FontRole { case ui, mono }
 
@@ -68,11 +77,37 @@ public struct PopupStyle {
         )
     }
 
+    /// Storage key for a role's override in a given appearance variant, e.g.
+    /// `"claude.light"`. The value is a `#RRGGBB` string in `popupColorOverrides`.
+    public static func overrideKey(_ role: PopupColorRole, _ variant: ColorVariant) -> String {
+        "\(role.rawValue).\(variant.rawValue)"
+    }
+
+    /// Appearance-aware color for a role, used when rendering the popup. If the
+    /// user overrode either variant, returns a dynamic color that resolves the
+    /// light/dark override at draw time and falls back to the WCAG default's
+    /// matching component for any variant left un-overridden. With no overrides
+    /// it hands back the role's default (already dynamic) untouched.
     public func color(_ role: PopupColorRole) -> NSColor {
-        if let hex = overrides[role.rawValue], let c = NSColor(popupHex: hex) {
-            return c
-        }
-        return role.defaultColor
+        let light = overrideColor(role, .light)
+        let dark = overrideColor(role, .dark)
+        guard light != nil || dark != nil else { return role.defaultColor }
+        let l = light ?? OverlayColors.resolved(role.defaultColor, in: ColorVariant.light.appearanceName)
+        let d = dark ?? OverlayColors.resolved(role.defaultColor, in: ColorVariant.dark.appearanceName)
+        return OverlayColors.dynamic(light: l, dark: d)
+    }
+
+    /// The concrete color a role resolves to for one variant — the override if
+    /// set, else the WCAG default resolved in that appearance. For the settings
+    /// UI, where each color well edits one variant at a time.
+    public func color(_ role: PopupColorRole, variant: ColorVariant) -> NSColor {
+        overrideColor(role, variant)
+            ?? OverlayColors.resolved(role.defaultColor, in: variant.appearanceName)
+    }
+
+    private func overrideColor(_ role: PopupColorRole, _ variant: ColorVariant) -> NSColor? {
+        guard let hex = overrides[Self.overrideKey(role, variant)] else { return nil }
+        return NSColor(popupHex: hex)
     }
 
     public func font(_ role: FontRole, weight: NSFont.Weight, tier: FontTier) -> NSFont {
@@ -98,7 +133,10 @@ public extension NSColor {
     convenience init?(popupHex hex: String) {
         var s = hex
         if s.hasPrefix("#") { s.removeFirst() }
-        guard s.count == 6, let v = Int(s, radix: 16) else { return nil }
+        // Require exactly six hex digits: `allSatisfy(isHexDigit)` rejects a
+        // leading "+"/"-" (which UInt32(_:radix:) would otherwise accept for
+        // "+" and mis-handle for "-").
+        guard s.count == 6, s.allSatisfy(\.isHexDigit), let v = UInt32(s, radix: 16) else { return nil }
         self.init(
             srgbRed: CGFloat((v >> 16) & 0xFF) / 255,
             green:   CGFloat((v >> 8) & 0xFF) / 255,
