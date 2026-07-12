@@ -120,29 +120,54 @@ final class AppearancePane: NSObject {
         return row
     }
 
-    /// A two-column grid of role name → color well.
+    /// Per-role color wells laid out in fixed columns of `name → pill` pairs.
+    /// Name and pill are separate grid columns (all left-placed), so both the
+    /// labels and the pills line up vertically and the pills never drift with
+    /// the pane width — a single 2-column grid let each well slide left/right
+    /// in its cell as the scroll view resized.
     private func colorGrid() -> NSView {
-        let cells: [[NSView]] = PopupColorRole.allCases.map { role in
-            let well = NSColorWell()
-            well.color = PopupStyle(settings: settings).color(role)
-            well.translatesAutoresizingMaskIntoConstraints = false
-            well.widthAnchor.constraint(equalToConstant: 44).isActive = true
-            well.heightAnchor.constraint(equalToConstant: 22).isActive = true
-            well.target = self
-            well.action = #selector(colorChanged(_:))
-            well.tag = colorTag(for: role)
-            colorWells[role] = well
-
+        let pairsPerRow = 4
+        var rows: [[NSView]] = []
+        var row: [NSView] = []
+        for role in PopupColorRole.allCases {
             let name = NSTextField(labelWithString: role.rawValue)
-            name.font = NSFont.systemFont(ofSize: 12)
-            return [name, well]
+            name.font = NSFont.systemFont(ofSize: 11)
+            name.lineBreakMode = .byTruncatingTail
+            row.append(name)
+            row.append(makeColorWell(for: role))
+            if row.count == pairsPerRow * 2 {
+                rows.append(row)
+                row = []
+            }
         }
-        let grid = NSGridView(views: cells)
-        grid.rowSpacing = 4
-        grid.columnSpacing = 12
+        if !row.isEmpty { rows.append(row) }   // ragged last row: grid fills the gap with empty cells
+
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing = 6
+        grid.columnSpacing = 6
         grid.translatesAutoresizingMaskIntoConstraints = false
-        if grid.numberOfColumns > 0 { grid.column(at: 0).xPlacement = .leading }
+        for i in 0..<grid.numberOfColumns {
+            let column = grid.column(at: i)
+            column.xPlacement = .leading
+            // Odd columns hold the pills; pad after each so pairs read as
+            // distinct groups instead of one long name-pill-name-pill run.
+            if i % 2 == 1 { column.trailingPadding = 18 }
+        }
         return grid
+    }
+
+    /// Build and register the color well for a role.
+    private func makeColorWell(for role: PopupColorRole) -> NSColorWell {
+        let well = NSColorWell()
+        well.color = PopupStyle(settings: settings).color(role)
+        well.translatesAutoresizingMaskIntoConstraints = false
+        well.widthAnchor.constraint(equalToConstant: 38).isActive = true
+        well.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        well.target = self
+        well.action = #selector(colorChanged(_:))
+        well.tag = colorTag(for: role)
+        colorWells[role] = well
+        return well
     }
 
     private func restoreRow() -> NSView {
