@@ -91,26 +91,37 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        // A flipped clip view anchors the document at the TOP-left, so content
+        // shorter than the viewport stays at the top instead of sinking to the
+        // bottom (NSClipView's default, non-flipped origin is bottom-left).
+        let clip = TopAnchoredClipView()
+        clip.drawsBackground = false
+        scroll.contentView = clip
         scroll.documentView = content
         content.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
-            content.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            content.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+            content.topAnchor.constraint(equalTo: clip.topAnchor),
+            content.widthAnchor.constraint(equalTo: clip.widthAnchor),
         ])
         return scroll
     }
 
     /// The controller is retained and reused, so the Appearance scroll view
-    /// keeps its prior offset. Snap it back to the top on reopen.
+    /// keeps its prior offset. Snap it back to the top on reopen. With the
+    /// flipped clip view, the top of the document is y = 0.
     private func resetAppearanceScroll() {
-        guard let scroll = appearanceScroll, let doc = scroll.documentView else { return }
-        doc.layoutSubtreeIfNeeded()
-        let clip = scroll.contentView
-        let topY = doc.isFlipped ? 0 : max(0, doc.bounds.height - clip.bounds.height)
-        clip.scroll(to: NSPoint(x: 0, y: topY))
-        scroll.reflectScrolledClipView(clip)
+        guard let scroll = appearanceScroll else { return }
+        scroll.documentView?.layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
+    /// A clip view that reports `isFlipped == true` so its document view is
+    /// laid out from the top-left corner.
+    private final class TopAnchoredClipView: NSClipView {
+        override var isFlipped: Bool { true }
     }
 
     /// The Configure window lives outside the app's main menu (op-who is an

@@ -120,40 +120,56 @@ final class AppearancePane: NSObject {
         return row
     }
 
-    /// Per-role color wells laid out in fixed columns of `name → pill` pairs.
-    /// Name and pill are separate grid columns (all left-placed), so both the
-    /// labels and the pills line up vertically and the pills never drift with
-    /// the pane width — a single 2-column grid let each well slide left/right
-    /// in its cell as the scroll view resized.
+    /// Per-role color wells laid out as fixed columns of `name → pill` pairs,
+    /// four pairs per row. Built from plain stacks (not an NSGridView, which
+    /// stretched to the pane width and flung its columns apart): each name
+    /// label has a fixed width so the pills line up vertically, and every row
+    /// ends in a low-hugging spacer that absorbs slack so the pills stay put
+    /// at the left instead of drifting as the pane resizes.
     private func colorGrid() -> NSView {
         let pairsPerRow = 4
-        var rows: [[NSView]] = []
-        var row: [NSView] = []
+        var rows: [NSView] = []
+        var cells: [NSView] = []
         for role in PopupColorRole.allCases {
-            let name = NSTextField(labelWithString: role.rawValue)
-            name.font = NSFont.systemFont(ofSize: 11)
-            name.lineBreakMode = .byTruncatingTail
-            row.append(name)
-            row.append(makeColorWell(for: role))
-            if row.count == pairsPerRow * 2 {
-                rows.append(row)
-                row = []
+            cells.append(colorCell(for: role))
+            if cells.count == pairsPerRow {
+                rows.append(colorRow(cells))
+                cells = []
             }
         }
-        if !row.isEmpty { rows.append(row) }   // ragged last row: grid fills the gap with empty cells
+        if !cells.isEmpty { rows.append(colorRow(cells)) }
 
-        let grid = NSGridView(views: rows)
-        grid.rowSpacing = 6
-        grid.columnSpacing = 6
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        for i in 0..<grid.numberOfColumns {
-            let column = grid.column(at: i)
-            column.xPlacement = .leading
-            // Odd columns hold the pills; pad after each so pairs read as
-            // distinct groups instead of one long name-pill-name-pill run.
-            if i % 2 == 1 { column.trailingPadding = 18 }
-        }
-        return grid
+        let column = NSStackView(views: rows)
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 6
+        return column
+    }
+
+    /// One `name → pill` cell with a fixed-width label so pills column-align.
+    private func colorCell(for role: PopupColorRole) -> NSView {
+        let name = NSTextField(labelWithString: role.rawValue)
+        name.font = NSFont.systemFont(ofSize: 11)
+        name.lineBreakMode = .byTruncatingTail
+        name.translatesAutoresizingMaskIntoConstraints = false
+        name.widthAnchor.constraint(equalToConstant: 86).isActive = true
+        let cell = NSStackView(views: [name, makeColorWell(for: role)])
+        cell.orientation = .horizontal
+        cell.alignment = .centerY
+        cell.spacing = 6
+        return cell
+    }
+
+    /// A row of color cells followed by a spacer that soaks up extra width,
+    /// keeping the cells left-aligned regardless of the row's actual width.
+    private func colorRow(_ cells: [NSView]) -> NSView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: cells + [spacer])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 18
+        return row
     }
 
     /// Build and register the color well for a role.
