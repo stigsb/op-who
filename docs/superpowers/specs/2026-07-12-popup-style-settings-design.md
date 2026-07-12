@@ -2,6 +2,11 @@
 
 **Date:** 2026-07-12
 **Status:** Approved for planning
+**Amended by:** [2026-07-12-wcag-contrast-guidance-design.md](2026-07-12-wcag-contrast-guidance-design.md)
+— color overrides become per-appearance (light + dark per role) with WCAG
+contrast badges + snap; supersedes the single-static-color decision and the
+"WCAG contrast is not enforced" non-goal below (guidance is added, still not
+enforced).
 
 ## Goal
 
