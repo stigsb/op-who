@@ -38,6 +38,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         installMainMenu()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.autosaveName = "com.stigbakken.op-who.statusItem"
         if let button = statusItem.button {
             button.image = Self.menuBarIcon()
             button.imagePosition = .imageOnly
