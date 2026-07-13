@@ -51,11 +51,20 @@ public struct ScriptInfo: Equatable {
     /// Full path to the script when one was named on argv. nil for
     /// `-c`/`-m`/`-e` invocations.
     public let scriptPath: String?
+    /// Directory named by a leading `cd <dir> && ` in a Claude Code
+    /// Bash-tool command. Overrides the chain-walked CWD in the popup.
+    public let workingDirectory: String?
 
-    public init(interpreter: String, scriptName: String, scriptPath: String?) {
+    public init(
+        interpreter: String,
+        scriptName: String,
+        scriptPath: String?,
+        workingDirectory: String? = nil
+    ) {
         self.interpreter = interpreter
         self.scriptName = scriptName
         self.scriptPath = scriptPath
+        self.workingDirectory = workingDirectory
     }
 }
 
@@ -260,10 +269,12 @@ public enum ProcessTree {
             if isShell, shellFlagIsInlineCommand(a) {
                 let snippet = i + 1 < argv.count ? argv[i + 1] : ""
                 if let inner = claudeWrapperCommand(snippet) {
+                    let cd = stripLeadingCd(inner)
                     return ScriptInfo(
                         interpreter: interpreter,
-                        scriptName: truncateSnippet(redactString(inner)),
-                        scriptPath: nil
+                        scriptName: truncateSnippet(redactString(cd?.command ?? inner)),
+                        scriptPath: nil,
+                        workingDirectory: cd?.directory
                     )
                 }
                 return ScriptInfo(
@@ -359,6 +370,30 @@ public enum ProcessTree {
             }
         }
         return nil
+    }
+
+    /// Claude Code often prefixes a Bash-tool command with an explicit
+    /// directory change: `cd /abs/path && <cmd>`. Reduce that to `<cmd>`
+    /// for display and surface the directory so the popup can show it as
+    /// the CWD. Deliberately a straight prefix check, matching how Claude
+    /// Code emits these — no shell parsing. The directory is everything
+    /// between `cd ` and the first ` && ` (one surrounding quote pair
+    /// stripped) and must be absolute; anything else returns nil.
+    static func stripLeadingCd(_ command: String) -> (directory: String, command: String)? {
+        guard command.hasPrefix("cd "),
+              let sep = command.range(of: " && ")
+        else { return nil }
+
+        var dir = String(command[command.index(command.startIndex, offsetBy: 3)..<sep.lowerBound])
+            .trimmingCharacters(in: .whitespaces)
+        if dir.count >= 2, dir.hasPrefix("'") && dir.hasSuffix("'")
+            || dir.hasPrefix("\"") && dir.hasSuffix("\"") {
+            dir = String(dir.dropFirst().dropLast())
+        }
+        let rest = String(command[sep.upperBound...])
+            .trimmingCharacters(in: .whitespaces)
+        guard dir.hasPrefix("/"), !rest.isEmpty else { return nil }
+        return (directory: dir, command: rest)
     }
 
     /// True for short flag bundles whose semantics include `-c`

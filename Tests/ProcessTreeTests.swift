@@ -299,6 +299,29 @@ struct DetectScriptTests {
         #expect(info?.scriptPath == nil)
     }
 
+    @Test func claudeCodeWrapperStripsLeadingCd() {
+        // Claude Code often prefixes the eval'd command with an explicit
+        // `cd /abs/path && `. Show the actual command and surface the
+        // directory so the popup can use it as the CWD.
+        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'cd /Users/x/git/sunstone/fleet-config && git commit -m msg' < /dev/null && pwd -P >| /tmp/c"
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", snippet]
+        )
+        #expect(info?.scriptName == "git commit -m msg")
+        #expect(info?.workingDirectory == "/Users/x/git/sunstone/fleet-config")
+    }
+
+    @Test func claudeCodeWrapperWithoutCdHasNoWorkingDirectory() {
+        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'git push' < /dev/null && pwd -P >| /tmp/c"
+        let info = ProcessTree.detectScript(
+            interpreter: "bash",
+            argv: ["bash", "-c", snippet]
+        )
+        #expect(info?.scriptName == "git push")
+        #expect(info?.workingDirectory == nil)
+    }
+
     @Test func claudeCodeWrapperUnescapesEmbeddedQuotes() {
         // A single quote inside the eval'd command arrives as '\'' in the
         // wrapper string.
@@ -328,6 +351,19 @@ struct DetectScriptTests {
             argv: ["bash", "-c", snippet]
         )
         #expect(info?.scriptName == "-c source .env && eval 'op signin'")
+    }
+
+    @Test func stripLeadingCdRequiresAbsoluteDirAndRemainder() {
+        // Straight prefix check only — no shell parsing.
+        #expect(ProcessTree.stripLeadingCd("cd /a/b && make")?.directory == "/a/b")
+        #expect(ProcessTree.stripLeadingCd("cd /a/b && make")?.command == "make")
+        #expect(ProcessTree.stripLeadingCd("cd \"/a b/c\" && make")?.directory == "/a b/c")
+        #expect(ProcessTree.stripLeadingCd("cd '/a b/c' && make")?.command == "make")
+        // Relative dir, missing ` && `, or empty remainder: leave untouched.
+        #expect(ProcessTree.stripLeadingCd("cd sub && make") == nil)
+        #expect(ProcessTree.stripLeadingCd("cd /a/b") == nil)
+        #expect(ProcessTree.stripLeadingCd("cd /a/b && ") == nil)
+        #expect(ProcessTree.stripLeadingCd("echo cd /a && make") == nil)
     }
 
     @Test func rubyPositional() {
