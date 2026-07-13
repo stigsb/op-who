@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-13
+
 - Added: Popup style settings — font pickers, text size, and per-role light/dark color overrides with live preview.
 - Added: Color settings show live WCAG contrast badges; clicking a failing badge snaps to the nearest passing color.
 - Added: Whole PEM blocks (private keys and certificates) are redacted.
