@@ -41,30 +41,25 @@ public struct ChainResult {
     public let scriptInfo: ScriptInfo?
 }
 
-/// What an interpreter in the chain is currently running. `interpreter` is the
-/// short process name (e.g. "python3", "bash"), `scriptName` is something
-/// human-friendly — the script's basename, or a `-c <snippet>` pseudo-name
-/// when the interpreter was invoked with an inline command.
+/// What an interpreter or invoked command in the chain is running.
+/// `interpreter` is the short process name (e.g. "python3", "git"),
+/// `scriptName` is human-friendly — the script's basename, or the redacted
+/// argv tail for a plain command.
 public struct ScriptInfo: Equatable {
     public let interpreter: String
     public let scriptName: String
     /// Full path to the script when one was named on argv. nil for
-    /// `-c`/`-m`/`-e` invocations.
+    /// `-c`/`-m`/`-e` invocations and plain commands.
     public let scriptPath: String?
-    /// Directory named by a leading `cd <dir> && ` in a Claude Code
-    /// Bash-tool command. Overrides the chain-walked CWD in the popup.
-    public let workingDirectory: String?
 
     public init(
         interpreter: String,
         scriptName: String,
-        scriptPath: String?,
-        workingDirectory: String? = nil
+        scriptPath: String?
     ) {
         self.interpreter = interpreter
         self.scriptName = scriptName
         self.scriptPath = scriptPath
-        self.workingDirectory = workingDirectory
     }
 }
 
