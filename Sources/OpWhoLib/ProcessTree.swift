@@ -201,20 +201,15 @@ public enum ProcessTree {
             }
         }
 
-        // Find the closest-to-trigger interpreter in the chain and pull its
-        // script name. Skip the Claude Code node — its argv is a long
-        // bun/cli internal blob, and the Claude Code session label already
-        // covers it more usefully.
-        var scriptInfo: ScriptInfo? = nil
-        for node in chain {
-            if node.pid == claudePID { continue }
-            guard Self.isInterpreter(name: node.name) else { continue }
-            let argv = processArgv(pid: node.pid)
-            if let info = Self.detectScript(interpreter: node.name, argv: argv) {
-                scriptInfo = info
-                break
-            }
-        }
+        // Pick the command to surface as the subtitle. For a shell `-c` wrapper
+        // (Claude's Bash tool or a one-liner) this is the real process it
+        // invoked; otherwise the interpreter/named-script it's running.
+        let scriptInfo = Self.resolveScriptInfo(
+            chain: chain,
+            triggerPID: chain.first?.pid,
+            claudePID: claudePID,
+            argvFor: { processArgv(pid: $0) }
+        )
 
         return ChainResult(
             chain: chain,
