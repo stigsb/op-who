@@ -79,11 +79,13 @@ when there is no richer Claude **session** label to show instead. Only the
 
 ### CWD
 
-Replace the `stripLeadingCd`-derived `ScriptInfo.workingDirectory` override with
-the **invoked-command process's own CWD** when it is not `/`, falling back to the
-existing `bestCWD` chain walk. The `cd /dir &&` that `stripLeadingCd`
-reconstructed is exactly the directory that process already inherited, so its
-real CWD carries the same information without any string parsing.
+Delete the `stripLeadingCd`-derived `ScriptInfo.workingDirectory` override
+outright and rely on the existing `bestCWD` chain walk. The invoked-command
+process is already a node in the chain, and `bestCWD` returns the first chain
+node with a non-`/` CWD — which is the directory that process inherited from the
+`cd /dir &&`. So `stripLeadingCd`'s reconstructed directory is recovered for free
+with no replacement code. (Confirmed against `recent-requests.json`: every
+Claude case already has a correct non-`/` `triggerCwd`.)
 
 ### Deletions
 
