@@ -45,7 +45,10 @@ func bodyRows(entry: OverlayPanel.ProcessEntry, dense: Bool) -> [BodyRow] {
     let driver = driverDescription(chain: entry.chain, claudeSession: entry.claudeSession)
     var whoValue = driver.text
     if entry.claudeSession == nil, let s = entry.scriptInfo {
-        whoValue += " \u{00B7} \(s.scriptName)"
+        // Show the command name too — for a plain invoked command the name is
+        // the leading argv token (`git commit -m msg`); scriptName alone would
+        // drop it. For an interpreter it prepends `python app.py` etc.
+        whoValue += " \u{00B7} \(s.interpreter) \(s.scriptName)"
     }
     rows.append(BodyRow(label: "who", value: whoValue, style: .who(driver.kind)))
 

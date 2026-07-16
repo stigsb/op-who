@@ -16,13 +16,14 @@ struct BodyRowsTests {
         git: GitContext?,
         claudeSession: String? = nil,
         prompt: String? = nil,
+        scriptInfo: ScriptInfo? = nil,
         kind: RequestKind = .onePasswordCLI
     ) -> OverlayPanel.ProcessEntry {
         OverlayPanel.ProcessEntry(
             pid: 1, chain: chain, triggerArgv: argv, tty: "/dev/ttys1",
             tabTitle: nil, tabShortcut: nil, claudeSession: claudeSession,
             claudeContext: prompt.map { ClaudeContext(sessionID: "s", lastUserPrompt: $0, lastRelevantCommand: nil) },
-            scriptInfo: nil, terminalBundleID: nil, terminalPID: nil,
+            scriptInfo: scriptInfo, terminalBundleID: nil, terminalPID: nil,
             cwd: cwd, triggerCwd: cwd, cmuxWorkspaceID: nil, cmuxTabID: nil,
             cmuxSurface: nil, pluginUpdate: nil,
             summary: RequestSummary(kind: kind, title: "", subtitle: nil, isWarning: false),
@@ -45,6 +46,19 @@ struct BodyRowsTests {
         #expect(rows[2].value == "~/git/fleet")
         #expect(rows[3].value == "foo")
         #expect(rows[4].value == ".claude/worktrees/foo")
+    }
+
+    @Test("who-line shows the full invoked command, name included")
+    func whoLineIncludesInvokedCommandName() {
+        // A plain invoked command (interpreter is the leading argv token) must
+        // keep its name: `git commit -m msg`, not just `commit -m msg`.
+        let e = entry(
+            argv: ["op-ssh-sign", "-Y", "sign"], chain: [node("op-ssh-sign")],
+            cwd: "~/git/fleet", git: nil,
+            scriptInfo: ScriptInfo(interpreter: "git", scriptName: "commit -m msg", scriptPath: nil)
+        )
+        let who = bodyRows(entry: e, dense: false).first { $0.label == "who" }
+        #expect(who?.value.contains("git commit -m msg") == true)
     }
 
     @Test("main checkout, dense off: worktree row shows (main)")
