@@ -29,6 +29,81 @@ struct ProcessNodeTests {
 @Suite("ProcessTree")
 struct ProcessTreeTests {
 
+    // Build a chain node with just the fields resolveScriptInfo reads.
+    private func pn(_ pid: pid_t, _ name: String) -> ProcessNode {
+        ProcessNode(pid: pid, ppid: 0, name: name, tty: nil,
+                    executablePath: nil, isVerifiedOnePasswordCLI: false)
+    }
+
+    @Test func resolveDropsWhenInvokedCommandIsTrigger() {
+        // [op, bash(-c), claude] — the op trigger is the wrapper's own child,
+        // so the subtitle is redundant with the title and must be dropped.
+        let chain = [pn(1, "op"), pn(2, "bash"), pn(3, "claude")]
+        let argv: [pid_t: [String]] = [
+            1: ["op", "item", "edit", "flux-webhook-tokens"],
+            2: ["bash", "-c", "source /x/.claude/shell-snapshots/s.sh && eval 'op item edit flux-webhook-tokens'"],
+            3: ["claude"],
+        ]
+        let info = ProcessTree.resolveScriptInfo(
+            chain: chain, triggerPID: 1, claudePID: 3, argvFor: { argv[$0] ?? [] })
+        #expect(info == nil)
+    }
+
+    @Test func resolveShowsDistinctInvokedCommand() {
+        // [op-ssh-sign, git, bash(-c), claude] — the real command is `git commit`,
+        // one non-shell hop below the wrapper, distinct from the op-ssh-sign trigger.
+        let chain = [pn(1, "op-ssh-sign"), pn(2, "git"), pn(3, "bash"), pn(4, "claude")]
+        let argv: [pid_t: [String]] = [
+            1: ["op-ssh-sign", "-Y", "sign"],
+            2: ["git", "commit", "-m", "msg"],
+            3: ["bash", "-c", "source /x/.claude/shell-snapshots/s.sh && eval 'git commit -m msg'"],
+            4: ["claude"],
+        ]
+        let info = ProcessTree.resolveScriptInfo(
+            chain: chain, triggerPID: 1, claudePID: 4, argvFor: { argv[$0] ?? [] })
+        #expect(info?.interpreter == "git")
+        #expect(info?.scriptName == "commit -m msg")
+        #expect(info?.scriptPath == nil)
+    }
+
+    @Test func resolveSkipsSubshellToFirstRealProcess() {
+        // [op, Python, uv, bash, bash(-c), claude] — a `(uv run …)` subshell sits
+        // between the wrapper and uv; skip the shell, land on uv.
+        let chain = [pn(1, "op"), pn(2, "Python"), pn(3, "uv"),
+                     pn(4, "bash"), pn(5, "bash"), pn(6, "claude")]
+        let argv: [pid_t: [String]] = [
+            1: ["op", "item", "get", "x"],
+            2: ["Python", "-c", "…"],
+            3: ["uv", "run", "scripts/generate-notifications.py"],
+            4: ["bash", "-c", "source /x/.claude/shell-snapshots/s.sh && eval '(uv run scripts/generate-notifications.py)'"],
+            5: ["bash", "-c", "source /x/.claude/shell-snapshots/s.sh && eval '(uv run scripts/generate-notifications.py)'"],
+            6: ["claude"],
+        ]
+        let info = ProcessTree.resolveScriptInfo(
+            chain: chain, triggerPID: 1, claudePID: 6, argvFor: { argv[$0] ?? [] })
+        #expect(info?.interpreter == "uv")
+        #expect(info?.scriptName == "run scripts/generate-notifications.py")
+    }
+
+    @Test func resolveFallsBackToNamedScriptWithoutWrapper() {
+        // No `-c` wrapper: `python app.py` in the chain resolves via detectScript.
+        let chain = [pn(1, "op"), pn(2, "python")]
+        let argv: [pid_t: [String]] = [1: ["op", "read", "x"], 2: ["python", "app.py"]]
+        let info = ProcessTree.resolveScriptInfo(
+            chain: chain, triggerPID: 1, claudePID: nil, argvFor: { argv[$0] ?? [] })
+        #expect(info?.interpreter == "python")
+        #expect(info?.scriptName == "app.py")
+    }
+
+    @Test func resolveFallsBackToNamedShellScriptWithoutDashC() {
+        // `bash deploy.sh` is not a `-c` wrapper — detectScript names the script.
+        let chain = [pn(1, "op"), pn(2, "bash")]
+        let argv: [pid_t: [String]] = [1: ["op", "read", "x"], 2: ["bash", "deploy.sh"]]
+        let info = ProcessTree.resolveScriptInfo(
+            chain: chain, triggerPID: 1, claudePID: nil, argvFor: { argv[$0] ?? [] })
+        #expect(info?.scriptName == "deploy.sh")
+    }
+
     @Test func formatChainSingle() {
         let chain = [
             ProcessNode(pid: 1, ppid: 0, name: "op", tty: nil, executablePath: nil, isVerifiedOnePasswordCLI: true),

@@ -336,6 +336,77 @@ public enum ProcessTree {
         )
     }
 
+    /// Pick the command to surface as the popup subtitle for a chain.
+    ///
+    /// When the chain contains a shell invoked with an inline-command flag
+    /// (`bash -c`, `sh -lc`, … — Claude Code's Bash-tool wrapper or a
+    /// hand-typed one-liner), show the real process that shell invoked rather
+    /// than parsing its `-c` string: the first non-shell process below the
+    /// wrapper, walking toward the trigger. Returns nil when that process IS
+    /// the trigger (the title already names it). With no wrapper, falls back to
+    /// interpreter/named-script detection via `detectScript`.
+    ///
+    /// `argvFor` supplies argv per pid; injected so this is unit-testable.
+    static func resolveScriptInfo(
+        chain: [ProcessNode],
+        triggerPID: pid_t?,
+        claudePID: pid_t?,
+        argvFor: (pid_t) -> [String]
+    ) -> ScriptInfo? {
+        if let w = outermostShellWrapperIndex(chain: chain, argvFor: argvFor) {
+            var j = w - 1
+            while j >= 0 {
+                let node = chain[j]
+                if node.pid != claudePID, !shellInterpreterNames.contains(node.name) {
+                    if node.pid == triggerPID { return nil }
+                    let argv = argvFor(node.pid)
+                    if isInterpreter(name: node.name),
+                       let info = detectScript(interpreter: node.name, argv: argv) {
+                        return info
+                    }
+                    return invokedCommandScriptInfo(name: node.name, argv: argv)
+                }
+                j -= 1
+            }
+            return nil
+        }
+
+        for node in chain where node.pid != claudePID && isInterpreter(name: node.name) {
+            if let info = detectScript(interpreter: node.name, argv: argvFor(node.pid)) {
+                return info
+            }
+        }
+        return nil
+    }
+
+    /// Index of the outermost (closest-to-terminal) shell node invoked with an
+    /// inline-command flag, or nil if the chain has none. A forked subshell
+    /// inherits the wrapper's `-c` argv, so several nodes may match; the highest
+    /// index is the real wrapper and the lower ones are its subshells.
+    private static func outermostShellWrapperIndex(
+        chain: [ProcessNode],
+        argvFor: (pid_t) -> [String]
+    ) -> Int? {
+        var result: Int? = nil
+        for (i, node) in chain.enumerated() where shellInterpreterNames.contains(node.name) {
+            if argvFor(node.pid).dropFirst().contains(where: shellFlagIsInlineCommand) {
+                result = i
+            }
+        }
+        return result
+    }
+
+    /// Render a plain (non-interpreter) invoked command — `git`, `uv`,
+    /// `terraform`, … — as a ScriptInfo: process name as `interpreter`, the
+    /// redacted argv tail (no argv[0]) as `scriptName`. Returns nil when the
+    /// command carries no arguments (nothing useful beyond the title's name).
+    private static func invokedCommandScriptInfo(name: String, argv: [String]) -> ScriptInfo? {
+        let redacted = redactArgv(argv)
+        guard redacted.count >= 2 else { return nil }
+        let rest = redacted.dropFirst().joined(separator: " ")
+        return ScriptInfo(interpreter: name, scriptName: truncateSnippet(rest), scriptPath: nil)
+    }
+
     private static let shellInterpreterNames: Set<String> =
         ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
 
