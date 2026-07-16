@@ -252,7 +252,6 @@ public enum ProcessTree {
     /// behavior of bash/zsh/sh.
     static func detectScript(interpreter: String, argv: [String]) -> ScriptInfo? {
         guard argv.count >= 1 else { return nil }
-        let isShell = shellInterpreterNames.contains(interpreter)
         let isPython = interpreter == "python" || interpreter.hasPrefix("python")
 
         var i = 1
@@ -261,23 +260,6 @@ public enum ProcessTree {
             if a == "--" { i += 1; break }
             if !a.hasPrefix("-") { break }
 
-            if isShell, shellFlagIsInlineCommand(a) {
-                let snippet = i + 1 < argv.count ? argv[i + 1] : ""
-                if let inner = claudeWrapperCommand(snippet) {
-                    let cd = stripLeadingCd(inner)
-                    return ScriptInfo(
-                        interpreter: interpreter,
-                        scriptName: truncateSnippet(redactString(cd?.command ?? inner)),
-                        scriptPath: nil,
-                        workingDirectory: cd?.directory
-                    )
-                }
-                return ScriptInfo(
-                    interpreter: interpreter,
-                    scriptName: "-c " + truncateSnippet(redactString(snippet)),
-                    scriptPath: nil
-                )
-            }
             if isPython {
                 if a == "-c" {
                     let snippet = i + 1 < argv.count ? argv[i + 1] : ""
@@ -404,63 +386,6 @@ public enum ProcessTree {
 
     private static let shellInterpreterNames: Set<String> =
         ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
-
-    /// Claude Code's Bash tool wraps every command in a shell-snapshot
-    /// preamble:
-    ///
-    ///     source ~/.claude/shell-snapshots/snapshot-bash-….sh … && eval '<cmd>' < /dev/null && pwd -P >| /tmp/…
-    ///
-    /// Showing the raw `-c` snippet truncates to pure boilerplate
-    /// ("-c source /Users/…/shell-snapsho…"), so recognize the shape and
-    /// return the eval'd command instead. A single quote inside the command
-    /// is encoded as `'\''`; unwrap those while scanning for the closing
-    /// quote. Returns nil for anything that doesn't match, including a
-    /// wrapper with no eval or an unterminated quote.
-    static func claudeWrapperCommand(_ snippet: String) -> String? {
-        guard snippet.hasPrefix("source "),
-              snippet.contains("/.claude/shell-snapshots/"),
-              let evalRange = snippet.range(of: "eval '")
-        else { return nil }
-
-        var command = ""
-        var rest = snippet[evalRange.upperBound...]
-        while let quote = rest.firstIndex(of: "'") {
-            command += rest[..<quote]
-            let after = rest.index(after: quote)
-            if rest[after...].hasPrefix("\\''") {
-                command += "'"
-                rest = rest[rest.index(after, offsetBy: 3)...]
-            } else {
-                let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
-        }
-        return nil
-    }
-
-    /// Claude Code often prefixes a Bash-tool command with an explicit
-    /// directory change: `cd /abs/path && <cmd>`. Reduce that to `<cmd>`
-    /// for display and surface the directory so the popup can show it as
-    /// the CWD. Deliberately a straight prefix check, matching how Claude
-    /// Code emits these — no shell parsing. The directory is everything
-    /// between `cd ` and the first ` && ` (one surrounding quote pair
-    /// stripped) and must be absolute; anything else returns nil.
-    static func stripLeadingCd(_ command: String) -> (directory: String, command: String)? {
-        guard command.hasPrefix("cd "),
-              let sep = command.range(of: " && ")
-        else { return nil }
-
-        var dir = String(command[command.index(command.startIndex, offsetBy: 3)..<sep.lowerBound])
-            .trimmingCharacters(in: .whitespaces)
-        if dir.count >= 2, dir.hasPrefix("'") && dir.hasSuffix("'")
-            || dir.hasPrefix("\"") && dir.hasSuffix("\"") {
-            dir = String(dir.dropFirst().dropLast())
-        }
-        let rest = String(command[sep.upperBound...])
-            .trimmingCharacters(in: .whitespaces)
-        guard dir.hasPrefix("/"), !rest.isEmpty else { return nil }
-        return (directory: dir, command: rest)
-    }
 
     /// True for short flag bundles whose semantics include `-c`
     /// (`-c`, `-lc`, `-ic`, `-cl`, …). Long flags (`--foo`) are out.

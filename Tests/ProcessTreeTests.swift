@@ -318,32 +318,6 @@ struct DetectScriptTests {
         #expect(info?.scriptName == "run.sh")
     }
 
-    @Test func bashInlineDashC() {
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", "op signin"]
-        )
-        #expect(info?.scriptName == "-c op signin")
-        #expect(info?.scriptPath == nil)
-    }
-
-    @Test func bashLoginInlineDashLC() {
-        // bash -lc 'op signin' — the login-shell + command-string combo
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-lc", "op signin"]
-        )
-        #expect(info?.scriptName == "-c op signin")
-    }
-
-    @Test func zshInlineDashC() {
-        let info = ProcessTree.detectScript(
-            interpreter: "zsh",
-            argv: ["zsh", "-c", "echo hi"]
-        )
-        #expect(info?.scriptName == "-c echo hi")
-    }
-
     @Test func shNoArgsReturnsNil() {
         let info = ProcessTree.detectScript(
             interpreter: "sh",
@@ -359,86 +333,6 @@ struct DetectScriptTests {
             argv: ["bash", "-i"]
         )
         #expect(info == nil)
-    }
-
-    @Test func claudeCodeWrapperExtractsEvalCommand() {
-        // Claude Code's Bash tool wraps every command in a shell-snapshot
-        // preamble; the overlay should show the eval'd command, not the
-        // boilerplate.
-        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1783893997809-xg1czc.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && eval 'op run --env-file=.env -- fleetctl get config' < /dev/null && pwd -P >| /tmp/claude-aa71-cwd"
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", snippet]
-        )
-        #expect(info?.scriptName == "op run --env-file=.env -- fleetctl get c…")
-        #expect(info?.scriptPath == nil)
-    }
-
-    @Test func claudeCodeWrapperStripsLeadingCd() {
-        // Claude Code often prefixes the eval'd command with an explicit
-        // `cd /abs/path && `. Show the actual command and surface the
-        // directory so the popup can use it as the CWD.
-        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'cd /Users/x/git/sunstone/fleet-config && git commit -m msg' < /dev/null && pwd -P >| /tmp/c"
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", snippet]
-        )
-        #expect(info?.scriptName == "git commit -m msg")
-        #expect(info?.workingDirectory == "/Users/x/git/sunstone/fleet-config")
-    }
-
-    @Test func claudeCodeWrapperWithoutCdHasNoWorkingDirectory() {
-        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'git push' < /dev/null && pwd -P >| /tmp/c"
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", snippet]
-        )
-        #expect(info?.scriptName == "git push")
-        #expect(info?.workingDirectory == nil)
-    }
-
-    @Test func claudeCodeWrapperUnescapesEmbeddedQuotes() {
-        // A single quote inside the eval'd command arrives as '\'' in the
-        // wrapper string.
-        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'echo '\\''hi'\\''' < /dev/null && pwd -P >| /tmp/c"
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", snippet]
-        )
-        #expect(info?.scriptName == "echo 'hi'")
-    }
-
-    @Test func claudeCodeWrapperWithoutEvalFallsBack() {
-        let snippet = "source /Users/x/.claude/shell-snapshots/snapshot-bash-1.sh && pwd"
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", snippet]
-        )
-        #expect(info?.scriptName == "-c source /Users/x/.claude/shell-snapshots/…")
-    }
-
-    @Test func nonClaudeSourceSnippetFallsBack() {
-        // A plain `source x && eval y` with no shell-snapshots path is not
-        // the Claude Code wrapper.
-        let snippet = "source .env && eval 'op signin'"
-        let info = ProcessTree.detectScript(
-            interpreter: "bash",
-            argv: ["bash", "-c", snippet]
-        )
-        #expect(info?.scriptName == "-c source .env && eval 'op signin'")
-    }
-
-    @Test func stripLeadingCdRequiresAbsoluteDirAndRemainder() {
-        // Straight prefix check only — no shell parsing.
-        #expect(ProcessTree.stripLeadingCd("cd /a/b && make")?.directory == "/a/b")
-        #expect(ProcessTree.stripLeadingCd("cd /a/b && make")?.command == "make")
-        #expect(ProcessTree.stripLeadingCd("cd \"/a b/c\" && make")?.directory == "/a b/c")
-        #expect(ProcessTree.stripLeadingCd("cd '/a b/c' && make")?.command == "make")
-        // Relative dir, missing ` && `, or empty remainder: leave untouched.
-        #expect(ProcessTree.stripLeadingCd("cd sub && make") == nil)
-        #expect(ProcessTree.stripLeadingCd("cd /a/b") == nil)
-        #expect(ProcessTree.stripLeadingCd("cd /a/b && ") == nil)
-        #expect(ProcessTree.stripLeadingCd("echo cd /a && make") == nil)
     }
 
     @Test func rubyPositional() {
