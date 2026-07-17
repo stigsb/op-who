@@ -41,30 +41,25 @@ public struct ChainResult {
     public let scriptInfo: ScriptInfo?
 }
 
-/// What an interpreter in the chain is currently running. `interpreter` is the
-/// short process name (e.g. "python3", "bash"), `scriptName` is something
-/// human-friendly — the script's basename, or a `-c <snippet>` pseudo-name
-/// when the interpreter was invoked with an inline command.
+/// What an interpreter or invoked command in the chain is running.
+/// `interpreter` is the short process name (e.g. "python3", "git"),
+/// `scriptName` is human-friendly — the script's basename, or the redacted
+/// argv tail for a plain command.
 public struct ScriptInfo: Equatable {
     public let interpreter: String
     public let scriptName: String
     /// Full path to the script when one was named on argv. nil for
-    /// `-c`/`-m`/`-e` invocations.
+    /// `-c`/`-m`/`-e` invocations and plain commands.
     public let scriptPath: String?
-    /// Directory named by a leading `cd <dir> && ` in a Claude Code
-    /// Bash-tool command. Overrides the chain-walked CWD in the popup.
-    public let workingDirectory: String?
 
     public init(
         interpreter: String,
         scriptName: String,
-        scriptPath: String?,
-        workingDirectory: String? = nil
+        scriptPath: String?
     ) {
         self.interpreter = interpreter
         self.scriptName = scriptName
         self.scriptPath = scriptPath
-        self.workingDirectory = workingDirectory
     }
 }
 
@@ -201,20 +196,15 @@ public enum ProcessTree {
             }
         }
 
-        // Find the closest-to-trigger interpreter in the chain and pull its
-        // script name. Skip the Claude Code node — its argv is a long
-        // bun/cli internal blob, and the Claude Code session label already
-        // covers it more usefully.
-        var scriptInfo: ScriptInfo? = nil
-        for node in chain {
-            if node.pid == claudePID { continue }
-            guard Self.isInterpreter(name: node.name) else { continue }
-            let argv = processArgv(pid: node.pid)
-            if let info = Self.detectScript(interpreter: node.name, argv: argv) {
-                scriptInfo = info
-                break
-            }
-        }
+        // Pick the command to surface as the subtitle. For a shell `-c` wrapper
+        // (Claude's Bash tool or a one-liner) this is the real process it
+        // invoked; otherwise the interpreter/named-script it's running.
+        let scriptInfo = Self.resolveScriptInfo(
+            chain: chain,
+            triggerPID: chain.first?.pid,
+            claudePID: claudePID,
+            argvFor: { processArgv(pid: $0) }
+        )
 
         return ChainResult(
             chain: chain,
@@ -257,7 +247,6 @@ public enum ProcessTree {
     /// behavior of bash/zsh/sh.
     static func detectScript(interpreter: String, argv: [String]) -> ScriptInfo? {
         guard argv.count >= 1 else { return nil }
-        let isShell = shellInterpreterNames.contains(interpreter)
         let isPython = interpreter == "python" || interpreter.hasPrefix("python")
 
         var i = 1
@@ -266,23 +255,6 @@ public enum ProcessTree {
             if a == "--" { i += 1; break }
             if !a.hasPrefix("-") { break }
 
-            if isShell, shellFlagIsInlineCommand(a) {
-                let snippet = i + 1 < argv.count ? argv[i + 1] : ""
-                if let inner = claudeWrapperCommand(snippet) {
-                    let cd = stripLeadingCd(inner)
-                    return ScriptInfo(
-                        interpreter: interpreter,
-                        scriptName: truncateSnippet(redactString(cd?.command ?? inner)),
-                        scriptPath: nil,
-                        workingDirectory: cd?.directory
-                    )
-                }
-                return ScriptInfo(
-                    interpreter: interpreter,
-                    scriptName: "-c " + truncateSnippet(redactString(snippet)),
-                    scriptPath: nil
-                )
-            }
             if isPython {
                 if a == "-c" {
                     let snippet = i + 1 < argv.count ? argv[i + 1] : ""
@@ -336,65 +308,79 @@ public enum ProcessTree {
         )
     }
 
-    private static let shellInterpreterNames: Set<String> =
-        ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
-
-    /// Claude Code's Bash tool wraps every command in a shell-snapshot
-    /// preamble:
+    /// Pick the command to surface as the popup subtitle for a chain.
     ///
-    ///     source ~/.claude/shell-snapshots/snapshot-bash-….sh … && eval '<cmd>' < /dev/null && pwd -P >| /tmp/…
+    /// When the chain contains a shell invoked with an inline-command flag
+    /// (`bash -c`, `sh -lc`, … — Claude Code's Bash-tool wrapper or a
+    /// hand-typed one-liner), show the real process that shell invoked rather
+    /// than parsing its `-c` string: the first non-shell process below the
+    /// wrapper, walking toward the trigger. Returns nil when that process IS
+    /// the trigger (the title already names it). With no wrapper, falls back to
+    /// interpreter/named-script detection via `detectScript`.
     ///
-    /// Showing the raw `-c` snippet truncates to pure boilerplate
-    /// ("-c source /Users/…/shell-snapsho…"), so recognize the shape and
-    /// return the eval'd command instead. A single quote inside the command
-    /// is encoded as `'\''`; unwrap those while scanning for the closing
-    /// quote. Returns nil for anything that doesn't match, including a
-    /// wrapper with no eval or an unterminated quote.
-    static func claudeWrapperCommand(_ snippet: String) -> String? {
-        guard snippet.hasPrefix("source "),
-              snippet.contains("/.claude/shell-snapshots/"),
-              let evalRange = snippet.range(of: "eval '")
-        else { return nil }
+    /// `argvFor` supplies argv per pid; injected so this is unit-testable.
+    static func resolveScriptInfo(
+        chain: [ProcessNode],
+        triggerPID: pid_t?,
+        claudePID: pid_t?,
+        argvFor: (pid_t) -> [String]
+    ) -> ScriptInfo? {
+        if let w = outermostShellWrapperIndex(chain: chain, argvFor: argvFor) {
+            var j = w - 1
+            while j >= 0 {
+                let node = chain[j]
+                if node.pid != claudePID, !shellInterpreterNames.contains(node.name) {
+                    if node.pid == triggerPID { return nil }
+                    let argv = argvFor(node.pid)
+                    if isInterpreter(name: node.name),
+                       let info = detectScript(interpreter: node.name, argv: argv) {
+                        return info
+                    }
+                    return invokedCommandScriptInfo(name: node.name, argv: argv)
+                }
+                j -= 1
+            }
+            return nil
+        }
 
-        var command = ""
-        var rest = snippet[evalRange.upperBound...]
-        while let quote = rest.firstIndex(of: "'") {
-            command += rest[..<quote]
-            let after = rest.index(after: quote)
-            if rest[after...].hasPrefix("\\''") {
-                command += "'"
-                rest = rest[rest.index(after, offsetBy: 3)...]
-            } else {
-                let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
+        for node in chain where node.pid != claudePID && isInterpreter(name: node.name) {
+            if let info = detectScript(interpreter: node.name, argv: argvFor(node.pid)) {
+                return info
             }
         }
         return nil
     }
 
-    /// Claude Code often prefixes a Bash-tool command with an explicit
-    /// directory change: `cd /abs/path && <cmd>`. Reduce that to `<cmd>`
-    /// for display and surface the directory so the popup can show it as
-    /// the CWD. Deliberately a straight prefix check, matching how Claude
-    /// Code emits these — no shell parsing. The directory is everything
-    /// between `cd ` and the first ` && ` (one surrounding quote pair
-    /// stripped) and must be absolute; anything else returns nil.
-    static func stripLeadingCd(_ command: String) -> (directory: String, command: String)? {
-        guard command.hasPrefix("cd "),
-              let sep = command.range(of: " && ")
-        else { return nil }
-
-        var dir = String(command[command.index(command.startIndex, offsetBy: 3)..<sep.lowerBound])
-            .trimmingCharacters(in: .whitespaces)
-        if dir.count >= 2, dir.hasPrefix("'") && dir.hasSuffix("'")
-            || dir.hasPrefix("\"") && dir.hasSuffix("\"") {
-            dir = String(dir.dropFirst().dropLast())
+    /// Index of the outermost (closest-to-terminal) shell node invoked with an
+    /// inline-command flag, or nil if the chain has none. A forked subshell
+    /// inherits the wrapper's `-c` argv, so several nodes may match; the highest
+    /// index is the real wrapper and the lower ones are its subshells.
+    private static func outermostShellWrapperIndex(
+        chain: [ProcessNode],
+        argvFor: (pid_t) -> [String]
+    ) -> Int? {
+        var result: Int? = nil
+        for (i, node) in chain.enumerated() where shellInterpreterNames.contains(node.name) {
+            if argvFor(node.pid).dropFirst().contains(where: shellFlagIsInlineCommand) {
+                result = i
+            }
         }
-        let rest = String(command[sep.upperBound...])
-            .trimmingCharacters(in: .whitespaces)
-        guard dir.hasPrefix("/"), !rest.isEmpty else { return nil }
-        return (directory: dir, command: rest)
+        return result
     }
+
+    /// Render a plain (non-interpreter) invoked command — `git`, `uv`,
+    /// `terraform`, … — as a ScriptInfo: process name as `interpreter`, the
+    /// redacted argv tail (no argv[0]) as `scriptName`. Returns nil when the
+    /// command carries no arguments (nothing useful beyond the title's name).
+    private static func invokedCommandScriptInfo(name: String, argv: [String]) -> ScriptInfo? {
+        let redacted = redactArgv(argv)
+        guard redacted.count >= 2 else { return nil }
+        let rest = redacted.dropFirst().joined(separator: " ")
+        return ScriptInfo(interpreter: name, scriptName: truncateSnippet(rest), scriptPath: nil)
+    }
+
+    private static let shellInterpreterNames: Set<String> =
+        ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
 
     /// True for short flag bundles whose semantics include `-c`
     /// (`-c`, `-lc`, `-ic`, `-cl`, …). Long flags (`--foo`) are out.

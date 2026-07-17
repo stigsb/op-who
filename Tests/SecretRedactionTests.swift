@@ -1,5 +1,6 @@
 import Testing
 @testable import OpWhoLib
+import Foundation
 
 @Suite("Secret redaction")
 struct SecretRedactionTests {
@@ -168,9 +169,22 @@ struct SecretRedactionTests {
         #expect(redactString("") == "")
     }
 
-    @Test func detectScriptRedactsSecretInInlineCommand() {
-        let argv = ["bash", "-c", "export TOKEN=ghp_" + String(repeating: "a", count: 36) + "; run"]
-        let info = ProcessTree.detectScript(interpreter: "bash", argv: argv)
+    @Test func resolveScriptInfoRedactsSecretInInvokedCommand() {
+        // A distinct invoked command below a `bash -c` wrapper gets its argv
+        // redacted via redactArgv.
+        let secret = "ghp_" + String(repeating: "a", count: 36)
+        let chain = [
+            ProcessNode(pid: 1, ppid: 0, name: "op", tty: nil, executablePath: nil, isVerifiedOnePasswordCLI: false),
+            ProcessNode(pid: 2, ppid: 0, name: "terraform", tty: nil, executablePath: nil, isVerifiedOnePasswordCLI: false),
+            ProcessNode(pid: 3, ppid: 0, name: "bash", tty: nil, executablePath: nil, isVerifiedOnePasswordCLI: false),
+        ]
+        let argv: [pid_t: [String]] = [
+            1: ["op", "read", "x"],
+            2: ["terraform", "apply", "-var", "token=" + secret],
+            3: ["bash", "-c", "source /x/.claude/shell-snapshots/s.sh && eval 'terraform apply -var token=…'"],
+        ]
+        let info = ProcessTree.resolveScriptInfo(
+            chain: chain, triggerPID: 1, claudePID: nil, argvFor: { argv[$0] ?? [] })
         #expect(info?.scriptName.contains(secretRedactionPlaceholder) == true)
         #expect(info?.scriptName.contains("ghp_") == false)
     }

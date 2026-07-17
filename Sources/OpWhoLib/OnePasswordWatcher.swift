@@ -249,11 +249,9 @@ public class OnePasswordWatcher {
             }
 
             // Get CWD from the chain — the trigger process (op, ssh) often
-            // has CWD of "/", so walk up to find the shell's CWD instead.
-            // A Claude Code `cd /dir && cmd` wrapper names the directory
-            // explicitly; trust that over the chain walk.
-            let cwd = (result.scriptInfo?.workingDirectory
-                ?? measure("bestCWD") { ProcessTree.bestCWD(chain: foldedChain) })
+            // has CWD "/", so bestCWD walks to the first ancestor with a real
+            // directory (which is the dir a `cd /x && …` wrapper left behind).
+            let cwd = measure("bestCWD") { ProcessTree.bestCWD(chain: foldedChain) }
                 .map(ProcessTree.tidyPath)
 
             // The trigger's own (untidied) CWD is needed by both plugin-update
