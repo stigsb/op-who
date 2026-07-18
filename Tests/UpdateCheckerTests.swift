@@ -40,6 +40,12 @@ struct UpdateCheckerVersionTests {
     @Test func rejectsNegativeComponents() {
         #expect(UpdateChecker.parseVersion("1.-1.0") == nil)
     }
+
+    @Test func parsesGitDescribeSuffixAsBaseRelease() {
+        // Local dev builds carry a `git describe` suffix; compare on the base.
+        #expect(UpdateChecker.parseVersion("v0.12.2-9-g595fe87") == [0, 12, 2])
+        #expect(UpdateChecker.parseVersion("0.12.2-9-g595fe87-dirty") == [0, 12, 2])
+    }
 }
 
 @Suite("UpdateChecker release evaluation")
@@ -80,6 +86,20 @@ struct UpdateCheckerEvaluateTests {
         let result = UpdateChecker.evaluate(responseData: Data("not json".utf8),
                                             currentVersion: "0.8.0")
         if case .failed = result { } else { Issue.record("expected .failed, got \(result)") }
+    }
+
+    @Test func reportsUpToDateForDevBuildPastLatestRelease() {
+        // A local dev build 9 commits past v0.12.2 must not be told it's behind.
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "v0.12.2"),
+                                            currentVersion: "v0.12.2-9-g595fe87")
+        #expect(result == .upToDate(current: "v0.12.2-9-g595fe87"))
+    }
+
+    @Test func reportsUpdateAvailableWhenDevBuildBehindNewerRelease() {
+        let url = "https://github.com/stigsb/op-who/releases/tag/v0.13.0"
+        let result = UpdateChecker.evaluate(responseData: releaseJSON(tag: "v0.13.0", url: url),
+                                            currentVersion: "v0.12.2-9-g595fe87")
+        #expect(result == .updateAvailable(latest: "0.13.0", releaseURL: URL(string: url)!))
     }
 
     @Test func reportsUpdateAvailableWhenCurrentVersionUnparseable() {

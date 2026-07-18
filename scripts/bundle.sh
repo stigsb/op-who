@@ -43,6 +43,20 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 cp "$BUILD_DIR/$PRODUCT" "$APP_DIR/Contents/MacOS/"
 cp Sources/OpWhoLib/Info.plist "$APP_DIR/Contents/"
 
+# Version stamping (must happen before signing so the signature binds the
+# final Info.plist). On an exact vX.X.X release tag, keep the Info.plist
+# version. On any other commit — a local dev build — overwrite
+# CFBundleShortVersionString with `git describe --tags` (e.g.
+# v0.12.2-8-g1cd02e5) so "About op-who" identifies the exact build instead of
+# showing the last release's number. Outside a git repo, the plist value stands.
+if EXACT_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null) \
+   && [[ "$EXACT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    : # exact release tag — Info.plist already carries the right version
+elif DESCRIBE=$(git describe --tags --always --dirty 2>/dev/null) && [[ -n "$DESCRIBE" ]]; then
+    echo "Dev build — stamping version $DESCRIBE"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $DESCRIBE" "$APP_DIR/Contents/Info.plist"
+fi
+
 # Re-sign so the signature's identifier matches CFBundleIdentifier (not the
 # per-build hash `swift build` assigns) and Info.plist is bound to the
 # signature. Prefer the configured dev cert if present; fall back to ad-hoc.

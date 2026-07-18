@@ -26,12 +26,17 @@ public enum UpdateChecker {
     static let latestReleaseAPI = URL(string: "https://api.github.com/repos/stigsb/op-who/releases/latest")!
 
     /// Parse a version string into numeric components. Accepts an optional
-    /// leading "v"/"V". Returns nil if any component is non-numeric or the
-    /// string is empty.
+    /// leading "v"/"V" and ignores any suffix after the first "-" — a
+    /// `git describe` build tag (`0.12.2-9-g595fe87`, `…-dirty`) or a semver
+    /// prerelease (`1.2.3-rc1`) compares as its base release. Returns nil if
+    /// any base component is non-numeric or the base is empty.
     public static func parseVersion(_ string: String) -> [Int]? {
         var s = string
         if let first = s.first, first == "v" || first == "V" {
             s.removeFirst()
+        }
+        if let dash = s.firstIndex(of: "-") {
+            s = String(s[..<dash])
         }
         guard !s.isEmpty else { return nil }
         let parts = s.split(separator: ".", omittingEmptySubsequences: false)
