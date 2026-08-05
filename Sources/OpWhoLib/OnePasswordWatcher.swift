@@ -271,8 +271,9 @@ public class OnePasswordWatcher {
             }()
 
             // For cmux, pull the workspace / tab identifiers from the trigger's
-            // env block AND ask cmux itself for the user-facing workspace name
-            // and tab title — those are user-renameable and the env-IDs are not.
+            // env block AND resolve CMUX_SURFACE_ID against the session file
+            // for the user-facing workspace name and tab title — those are
+            // user-renameable and the env-IDs are not.
             var cmuxWorkspaceID: String? = nil
             var cmuxTabID: String? = nil
             var cmuxSurface: CmuxSurfaceInfo? = nil
@@ -280,23 +281,29 @@ public class OnePasswordWatcher {
                 let env = measure("processEnvironment[\(triggerPID)]") {
                     ProcessTree.processEnvironment(
                         pid: triggerPID,
-                        names: ["CMUX_WORKSPACE_ID", "CMUX_TAB_ID"]
+                        names: ["CMUX_WORKSPACE_ID", "CMUX_TAB_ID", "CMUX_SURFACE_ID"]
                     )
                 }
                 cmuxWorkspaceID = env["CMUX_WORKSPACE_ID"]
                 cmuxTabID = env["CMUX_TAB_ID"]
-                Log.cmux.info("trigger pid=\(triggerPID, privacy: .public) tty=\(result.tty ?? "<nil>", privacy: .public) CMUX_WORKSPACE_ID=\(cmuxWorkspaceID ?? "<unset>", privacy: .public) CMUX_TAB_ID=\(cmuxTabID ?? "<unset>", privacy: .public)")
-                if let tty = result.tty {
-                    // Pass the trigger's RAW absolute CWD (not the tidied
-                    // ~/-form): cmux records panel directories as absolute
-                    // paths, and we need them to disambiguate panels that
-                    // share a recycled tty device.
-                    cmuxSurface = measure("cmuxSurfaceInfo[\(tty)]") {
-                        CmuxHelper.surfaceInfo(forTTY: tty, triggerCWD: triggerCWD)
+
+                // Env-first identification: the trigger's own env, then the
+                // chain walk-up (env vars are inherited; caffeinate-style
+                // children lack them but their parents don't). Nothing spawns
+                // here — env reads plus one cached file read.
+                let uuid = measure("cmuxSurfaceUUID[\(triggerPID)]") {
+                    CmuxHelper.surfaceUUID(forChain: foldedChain) { pid in
+                        pid == triggerPID
+                            ? env["CMUX_SURFACE_ID"]
+                            : ProcessTree.processEnvironment(
+                                  pid: pid, names: ["CMUX_SURFACE_ID"])["CMUX_SURFACE_ID"]
                     }
-                } else {
-                    Log.cmux.info("trigger has no TTY — skipping cmux surface lookup")
                 }
+                cmuxSurface = uuid.flatMap { id in
+                    measure("cmuxSurfaceInfo[uuid]") { CmuxHelper.surfaceInfo(forSurfaceID: id) }
+                }
+
+                Log.cmux.info("trigger pid=\(triggerPID, privacy: .public) CMUX_SURFACE_ID=\(uuid ?? "<none>", privacy: .public) sessionHit=\(cmuxSurface != nil, privacy: .public) CMUX_WORKSPACE_ID=\(cmuxWorkspaceID ?? "<unset>", privacy: .public)")
             }
 
             // Run the matcher engine once here so the same evaluation drives
@@ -629,7 +636,7 @@ func jsonDump(entries: [OverlayPanel.ProcessEntry]) -> String {
                 "workspaceTitle": s.workspaceTitle,
                 "surfaceRef": s.surfaceRef,
                 "surfaceTitle": s.surfaceTitle,
-                "tty": s.tty,
+                "surfaceID": s.surfaceID ?? "",
             ]
         }
 

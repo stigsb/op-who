@@ -2,6 +2,149 @@ import Foundation
 import Testing
 @testable import OpWhoLib
 
+@Suite("CmuxHelper session file keyed by panel.id")
+struct CmuxSessionByPanelIDTests {
+
+    static let sessionFixtureJSON = """
+    {
+      "windows": [
+        {
+          "tabManager": {
+            "workspaces": [
+              {
+                "customTitle": "applicant-tracker",
+                "processTitle": "cleanup-legacy-import-references",
+                "currentDirectory": "/Users/u/git/applicant-tracker",
+                "panels": [
+                  {
+                    "id": "EB114B2A-5372-40B3-A6A1-913D96A2FEA3",
+                    "title": "claude",
+                    "type": "terminal",
+                    "directory": "/Users/u/git/applicant-tracker",
+                    "gitBranch": { "branch": "cleanup-legacy-import-references", "isDirty": true }
+                  },
+                  {
+                    "id": "5D3F0A9C-1B2C-4D5E-9F0A-1B2C3D4E5F6A",
+                    "title": "shell",
+                    "type": "terminal",
+                    "directory": "/Users/u/git/applicant-tracker",
+                    "gitBranch": null
+                  },
+                  {
+                    "id": "AA000000-0000-4000-8000-000000000001",
+                    "title": "docs",
+                    "type": "browser"
+                  }
+                ]
+              },
+              {
+                "customTitle": null,
+                "processTitle": "op-who",
+                "currentDirectory": "/Users/u/git/stigsb/op-who",
+                "panels": [
+                  {
+                    "id": "DC89EB3D-5E6E-4091-BD04-78E24371C1D8",
+                    "title": "build",
+                    "type": "terminal",
+                    "directory": "/Users/u/git/stigsb/op-who",
+                    "gitBranch": { "branch": "feat/cmux-show-tab", "isDirty": false }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+    """
+
+    private var map: [String: CmuxSurfaceInfo] {
+        CmuxHelper.parseSessionFileByPanelID(Data(Self.sessionFixtureJSON.utf8))
+    }
+
+    @Test("UUID hit yields the full display record")
+    func uuidHit() {
+        let info = map["EB114B2A-5372-40B3-A6A1-913D96A2FEA3"]
+        #expect(info?.workspaceTitle == "applicant-tracker")
+        #expect(info?.workspaceDescription == "cleanup-legacy-import-references")
+        #expect(info?.surfaceTitle == "claude")
+        #expect(info?.surfaceID == "EB114B2A-5372-40B3-A6A1-913D96A2FEA3")
+        #expect(info?.directory == "/Users/u/git/applicant-tracker")
+        #expect(info?.workspaceIndex == 1)      // ⌘1
+        #expect(info?.tabIndex == 1)            // ⌃1
+        #expect(info?.workspaceTabCount == 3)   // ⌃N spans all panels, browser included
+    }
+
+    @Test("workspace title falls back to processTitle when customTitle is absent")
+    func processTitleFallback() {
+        #expect(map["DC89EB3D-5E6E-4091-BD04-78E24371C1D8"]?.workspaceTitle == "op-who")
+        #expect(map["DC89EB3D-5E6E-4091-BD04-78E24371C1D8"]?.workspaceIndex == 2)
+    }
+
+    @Test("second panel gets 1-based tabIndex from iteration order")
+    func tabIndexes() {
+        #expect(map["5D3F0A9C-1B2C-4D5E-9F0A-1B2C3D4E5F6A"]?.tabIndex == 2)
+    }
+
+    @Test("non-terminal panel types are not identification targets")
+    func browserPanelExcluded() {
+        #expect(map["AA000000-0000-4000-8000-000000000001"] == nil)
+    }
+
+    @Test("keys the parser doesn't model (gitBranch, stableSurfaceId) are tolerated, not a parse failure")
+    func unmodeledKeysTolerated() {
+        #expect(map["5D3F0A9C-1B2C-4D5E-9F0A-1B2C3D4E5F6A"] != nil)
+    }
+
+    @Test("unknown UUID and malformed input yield no identification")
+    func missAndMalformed() {
+        #expect(map["00000000-0000-4000-8000-00000000DEAD"] == nil)
+        #expect(CmuxHelper.parseSessionFileByPanelID(Data()).isEmpty)
+        #expect(CmuxHelper.parseSessionFileByPanelID(Data("not json".utf8)).isEmpty)
+    }
+}
+
+@Suite("CmuxHelper env-var chain walk")
+struct CmuxEnvWalkTests {
+    private func node(_ pid: pid_t, _ ppid: pid_t) -> ProcessNode {
+        ProcessNode(pid: pid, ppid: ppid, name: "p\(pid)", tty: nil,
+                    executablePath: nil, isVerifiedOnePasswordCLI: false)
+    }
+    // Trigger-first chain, like ChainResult.chain: 300 (trigger) → 200 → 100.
+    private var chain: [ProcessNode] { [node(300, 200), node(200, 100), node(100, 1)] }
+    private let uuid = "EB114B2A-5372-40B3-A6A1-913D96A2FEA3"
+
+    @Test("present on the trigger itself")
+    func onTrigger() {
+        #expect(CmuxHelper.surfaceUUID(forChain: chain) { $0 == 300 ? uuid : nil } == uuid)
+    }
+
+    @Test("absent on the trigger, found on an ancestor two hops up")
+    func onAncestor() {
+        #expect(CmuxHelper.surfaceUUID(forChain: chain) { $0 == 100 ? uuid : nil } == uuid)
+    }
+
+    @Test("leaf-first: the trigger's own value beats an ancestor's")
+    func leafFirst() {
+        let hit = CmuxHelper.surfaceUUID(forChain: chain) {
+            $0 == 300 ? uuid : "AA000000-0000-4000-8000-000000000001"
+        }
+        #expect(hit == uuid)
+    }
+
+    @Test("absent everywhere (including unreadable env blocks, which read as nil) returns nil")
+    func absentEverywhere() {
+        #expect(CmuxHelper.surfaceUUID(forChain: chain) { _ in nil } == nil)
+        #expect(CmuxHelper.surfaceUUID(forChain: []) { _ in uuid } == nil)
+    }
+
+    @Test("empty-string value is treated as absent and the walk continues")
+    func emptyValueSkipped() {
+        let hit = CmuxHelper.surfaceUUID(forChain: chain) { $0 == 300 ? "" : ($0 == 200 ? uuid : nil) }
+        #expect(hit == uuid)
+    }
+}
+
 // `.serialized` because every test here installs/clears the shared global
 // `CmuxHelper.testMap`. Swift Testing runs tests in parallel by default, so
 // without this one test's `clearTestMap()` (via defer) can fire between
@@ -9,360 +152,8 @@ import Testing
 // then falls through to the real cmux session file (absent in CI → nil, or the
 // developer's live session locally), producing flaky, environment-dependent
 // failures. Serializing the suite removes the interleaving.
-@Suite("CmuxHelper session-file parser", .serialized)
+@Suite("CmuxHelper title helpers")
 struct CmuxHelperTests {
-
-    /// Trimmed-down but realistic chunk of cmux's
-    /// `~/Library/Application Support/cmux/session-com.cmuxterm.app.json`.
-    /// Three workspaces: one user-named ("trusthere"), one customTitle=null
-    /// path-named, and one with neither customTitle nor processTitle.
-    private let sampleJSON = """
-    {
-      "version": 1,
-      "createdAt": "2026-05-12T00:00:00Z",
-      "windows": [
-        {
-          "tabManager": {
-            "workspaces": [
-              {
-                "customTitle": "trusthere",
-                "processTitle": "Terminal 1",
-                "currentDirectory": "/Users/stig/git/trusthere",
-                "panels": [
-                  {
-                    "id": "panel-1",
-                    "title": "main",
-                    "ttyName": "ttys019",
-                    "type": "terminal"
-                  },
-                  {
-                    "id": "panel-2",
-                    "title": "trusthere",
-                    "ttyName": "ttys021",
-                    "type": "terminal"
-                  }
-                ]
-              },
-              {
-                "customTitle": null,
-                "processTitle": "/Users/stig/git/stigsb/op-who",
-                "currentDirectory": "/Users/stig/git/stigsb/op-who",
-                "panels": [
-                  {
-                    "id": "panel-3",
-                    "title": "/Users/stig/git/stigsb/op-who",
-                    "ttyName": "ttys033",
-                    "type": "terminal"
-                  }
-                ]
-              },
-              {
-                "customTitle": null,
-                "processTitle": "Terminal 7",
-                "currentDirectory": "/tmp",
-                "panels": [
-                  {
-                    "id": "panel-4",
-                    "title": "",
-                    "ttyName": "ttys077",
-                    "type": "terminal"
-                  },
-                  {
-                    "id": "panel-5",
-                    "title": "cmux landing",
-                    "ttyName": null,
-                    "type": "browser"
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      ]
-    }
-    """
-
-    @Test func parsesAllTerminalPanels() {
-        let map = CmuxHelper.parseSessionFile(sampleJSON)
-        // 4 terminal panels (the browser panel with ttyName=null is excluded).
-        #expect(map.count == 4)
-        #expect(map["ttys019"]?.workspaceTitle == "trusthere")
-        #expect(map["ttys019"]?.surfaceTitle == "main")
-        #expect(map["ttys021"]?.surfaceTitle == "trusthere")
-    }
-
-    @Test func workspaceTitlePrefersCustomTitle() {
-        // workspace 1 has customTitle="trusthere" and processTitle="Terminal 1".
-        // We must take the user-set customTitle, not the auto-named processTitle.
-        let map = CmuxHelper.parseSessionFile(sampleJSON)
-        #expect(map["ttys019"]?.workspaceTitle == "trusthere")
-        #expect(map["ttys019"]?.workspaceDescription == "Terminal 1")
-    }
-
-    @Test func workspaceTitleFallsBackToProcessTitle() {
-        // workspace 2 has customTitle=null — processTitle is the path.
-        let map = CmuxHelper.parseSessionFile(sampleJSON)
-        #expect(map["ttys033"]?.workspaceTitle == "/Users/stig/git/stigsb/op-who")
-        #expect(map["ttys033"]?.workspaceDescription == nil)
-    }
-
-    @Test func panelsWithoutTTYAreFilteredOut() {
-        // Browser panel had ttyName=null; should not appear under any key.
-        let map = CmuxHelper.parseSessionFile(sampleJSON)
-        for info in map.values {
-            #expect(info.surfaceType == "terminal")
-            #expect(info.surfaceRef != "surface:panel-5")
-        }
-    }
-
-    @Test func unknownTtyReturnsNil() {
-        let map = CmuxHelper.parseSessionFile(sampleJSON)
-        #expect(map["ttys999"] == nil)
-    }
-
-    @Test func emptyOutputProducesEmptyMap() {
-        #expect(CmuxHelper.parseSessionFile(Data()).isEmpty)
-        #expect(CmuxHelper.parseSessionFile("").isEmpty)
-        #expect(CmuxHelper.parseSessionFile("not json at all").isEmpty)
-    }
-
-    @Test func ttyWithDevPrefixIsStripped() {
-        let json = """
-        {"windows":[{"tabManager":{"workspaces":[{
-          "customTitle":"x","processTitle":null,"currentDirectory":null,
-          "panels":[{"id":"a","title":"t","ttyName":"/dev/ttys010","type":"terminal"}]
-        }]}}]}
-        """
-        let map = CmuxHelper.parseSessionFile(json)
-        #expect(map["ttys010"]?.surfaceTitle == "t")
-        #expect(map["/dev/ttys010"] == nil)
-    }
-
-    // MARK: - Colliding TTYs disambiguated by trigger CWD
-
-    /// Two terminal panels in different workspaces share the SAME ttyName
-    /// ("ttys015") — tty device numbers get recycled and cmux leaves stale
-    /// entries. They live in different directories. surfaceInfo must pick the
-    /// panel whose directory the trigger is actually inside (by CWD), not
-    /// whichever the parser happened to insert last.
-    private let collidingTTYJSON = """
-    {
-      "windows": [
-        {
-          "tabManager": {
-            "workspaces": [
-              {
-                "customTitle": "api-token-broker",
-                "processTitle": null,
-                "currentDirectory": "/Users/x/otel-token-broker",
-                "panels": [
-                  {
-                    "id": "panel-a",
-                    "title": "api-token-broker",
-                    "ttyName": "ttys015",
-                    "type": "terminal",
-                    "directory": "/Users/x/otel-token-broker"
-                  }
-                ]
-              },
-              {
-                "customTitle": "agent-vent",
-                "processTitle": null,
-                "currentDirectory": "/Users/x/claude-plugins/.claude/worktrees/agent-vent",
-                "panels": [
-                  {
-                    "id": "panel-b",
-                    "title": "claude-plugins",
-                    "ttyName": "ttys015",
-                    "type": "terminal",
-                    "directory": "/Users/x/claude-plugins/.claude/worktrees/agent-vent"
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      ]
-    }
-    """
-
-    @Test func collidingTTYDisambiguatedByTriggerCWD() {
-        // The regression case: ttys015 is shared by api-token-broker and
-        // agent-vent. The trigger's CWD is inside agent-vent — we must return
-        // the agent-vent panel, NOT api-token-broker.
-        CmuxHelper.installTestMap(CmuxHelper.parseSessionFileGrouped(collidingTTYJSON))
-        defer { CmuxHelper.clearTestMap() }
-        let info = CmuxHelper.surfaceInfo(
-            forTTY: "/dev/ttys015",
-            triggerCWD: "/Users/x/claude-plugins/.claude/worktrees/agent-vent"
-        )
-        #expect(info?.workspaceTitle == "agent-vent")
-        #expect(info?.workspaceTitle != "api-token-broker")
-    }
-
-    @Test func singleCandidateReturnedRegardlessOfTriggerCWD() {
-        // No collision: a single panel for ttys015. It must be returned even
-        // when the trigger CWD doesn't match its directory (no regression vs.
-        // the old behaviour where any matching tty was returned).
-        let json = """
-        {"windows":[{"tabManager":{"workspaces":[{
-          "customTitle":"solo","processTitle":null,"currentDirectory":"/Users/x/solo",
-          "panels":[{"id":"s","title":"t","ttyName":"ttys015","type":"terminal","directory":"/Users/x/solo"}]
-        }]}}]}
-        """
-        CmuxHelper.installTestMap(CmuxHelper.parseSessionFileGrouped(json))
-        defer { CmuxHelper.clearTestMap() }
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/totally/unrelated").map(\.workspaceTitle) == "solo")
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: nil).map(\.workspaceTitle) == "solo")
-    }
-
-    @Test func multipleCandidatesNoMatchReturnsNil() {
-        // Two candidates, but the trigger CWD is inside neither panel's dir.
-        // We must NOT guess — return nil (showing no workspace is correct).
-        CmuxHelper.installTestMap(CmuxHelper.parseSessionFileGrouped(collidingTTYJSON))
-        defer { CmuxHelper.clearTestMap() }
-        let info = CmuxHelper.surfaceInfo(
-            forTTY: "/dev/ttys015",
-            triggerCWD: "/Users/x/somewhere/else"
-        )
-        #expect(info == nil)
-    }
-
-    @Test func multipleCandidatesNilTriggerCWDReturnsNil() {
-        // Two candidates, trigger CWD unknown → can't disambiguate → nil.
-        CmuxHelper.installTestMap(CmuxHelper.parseSessionFileGrouped(collidingTTYJSON))
-        defer { CmuxHelper.clearTestMap() }
-        let info = CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: nil)
-        #expect(info == nil)
-    }
-
-    @Test func prefixMatchIsPathComponentAware() {
-        // Two candidates: /a/b and /a/bc. A trigger CWD of /a/b/sub must match
-        // /a/b (subdir) but NOT /a/bc (sibling sharing a name prefix).
-        let json = """
-        {"windows":[{"tabManager":{"workspaces":[
-          {"customTitle":"bee","processTitle":null,"currentDirectory":"/a/b",
-           "panels":[{"id":"p1","title":"t","ttyName":"ttys015","type":"terminal","directory":"/a/b"}]},
-          {"customTitle":"beecee","processTitle":null,"currentDirectory":"/a/bc",
-           "panels":[{"id":"p2","title":"t","ttyName":"ttys015","type":"terminal","directory":"/a/bc"}]}
-        ]}}]}
-        """
-        CmuxHelper.installTestMap(CmuxHelper.parseSessionFileGrouped(json))
-        defer { CmuxHelper.clearTestMap() }
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/a/b/sub").map(\.workspaceTitle) == "bee")
-        // Exact match of the sibling resolves to that sibling, not /a/b.
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/a/bc").map(\.workspaceTitle) == "beecee")
-        // A CWD that is a prefix-sharing non-subdir of /a/b matches neither
-        // (it's /a/bc-style); /a/bcd is under neither panel dir.
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/a/bcd") == nil)
-    }
-
-    @Test func longestDirectoryWinsAmongMultipleMatches() {
-        // Nested panels both prefix the trigger CWD; the more specific
-        // (longest) directory must win.
-        let json = """
-        {"windows":[{"tabManager":{"workspaces":[
-          {"customTitle":"outer","processTitle":null,"currentDirectory":"/a",
-           "panels":[{"id":"p1","title":"t","ttyName":"ttys015","type":"terminal","directory":"/a"}]},
-          {"customTitle":"inner","processTitle":null,"currentDirectory":"/a/b",
-           "panels":[{"id":"p2","title":"t","ttyName":"ttys015","type":"terminal","directory":"/a/b"}]}
-        ]}}]}
-        """
-        CmuxHelper.installTestMap(CmuxHelper.parseSessionFileGrouped(json))
-        defer { CmuxHelper.clearTestMap() }
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/a/b/c").map(\.workspaceTitle) == "inner")
-    }
-
-    @Test func parsedPanelCarriesDirectory() {
-        let map = CmuxHelper.parseSessionFileGrouped(collidingTTYJSON)
-        let candidates = map["ttys015"] ?? []
-        #expect(candidates.count == 2)
-        #expect(candidates.contains { $0.directory == "/Users/x/otel-token-broker" })
-        #expect(candidates.contains { $0.directory == "/Users/x/claude-plugins/.claude/worktrees/agent-vent" })
-    }
-
-    /// ProcessTree.processCWD returns symlink-resolved paths (e.g. /private/var)
-    /// while cmux records the unresolved panel directory (e.g. /var). The
-    /// disambiguation must still match across that difference. We build a real
-    /// temp symlink so the test is deterministic and doesn't depend on any
-    /// machine-specific symlink layout.
-    @Test func surfaceInfoMatchesAcrossSymlinkedPaths() throws {
-        let fm = FileManager.default
-        let realDir = fm.temporaryDirectory
-            .appendingPathComponent("op-who-real-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: realDir, withIntermediateDirectories: true)
-        let linkDir = fm.temporaryDirectory
-            .appendingPathComponent("op-who-link-\(UUID().uuidString)", isDirectory: true)
-        try fm.createSymbolicLink(at: linkDir, withDestinationURL: realDir)
-        defer {
-            try? fm.removeItem(at: linkDir)
-            try? fm.removeItem(at: realDir)
-        }
-
-        // Panel directory is the UNRESOLVED symlink path; trigger CWD is the
-        // RESOLVED real path. They differ as raw strings but normalize equal.
-        let panelDir = linkDir.path
-        let triggerCWD = realDir.resolvingSymlinksInPath().path
-        #expect(panelDir != triggerCWD)  // guard against a vacuous test
-
-        let map: [String: [CmuxSurfaceInfo]] = [
-            "ttys015": [
-                CmuxSurfaceInfo(
-                    workspaceRef: "workspace:0:0",
-                    workspaceTitle: "other",
-                    surfaceRef: "surface:o",
-                    surfaceTitle: "t",
-                    tty: "ttys015",
-                    directory: "/some/unrelated/dir"
-                ),
-                CmuxSurfaceInfo(
-                    workspaceRef: "workspace:0:1",
-                    workspaceTitle: "linked",
-                    surfaceRef: "surface:l",
-                    surfaceTitle: "t",
-                    tty: "ttys015",
-                    directory: panelDir
-                ),
-            ]
-        ]
-        CmuxHelper.installTestMap(map)
-        defer { CmuxHelper.clearTestMap() }
-
-        let info = CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: triggerCWD)
-        #expect(info?.workspaceTitle == "linked")
-    }
-
-    /// An empty panel directory must never match: "" + "/" == "/" would otherwise
-    /// prefix every absolute path and win over real candidates.
-    @Test func emptyPanelDirectoryIsNotMatched() {
-        let map: [String: [CmuxSurfaceInfo]] = [
-            "ttys015": [
-                CmuxSurfaceInfo(
-                    workspaceRef: "workspace:0:0",
-                    workspaceTitle: "empty",
-                    surfaceRef: "surface:e",
-                    surfaceTitle: "t",
-                    tty: "ttys015",
-                    directory: ""
-                ),
-                CmuxSurfaceInfo(
-                    workspaceRef: "workspace:0:1",
-                    workspaceTitle: "real",
-                    surfaceRef: "surface:r",
-                    surfaceTitle: "t",
-                    tty: "ttys015",
-                    directory: "/Users/x/real"
-                ),
-            ]
-        ]
-        CmuxHelper.installTestMap(map)
-        defer { CmuxHelper.clearTestMap() }
-
-        // CWD inside the real panel → must pick "real", never the empty one.
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/Users/x/real/sub")?.workspaceTitle == "real")
-        // CWD matching neither → nil (the empty dir must not act as a catch-all).
-        #expect(CmuxHelper.surfaceInfo(forTTY: "/dev/ttys015", triggerCWD: "/Users/x/elsewhere") == nil)
-    }
 
     // MARK: - Generic-title detection
 
@@ -392,33 +183,29 @@ struct CmuxHelperTests {
     // MARK: - displayWorkspaceTitle
 
     @Test func displayUsesRealTitleAsIs() {
-        let map = CmuxHelper.parseSessionFile(sampleJSON)
-        #expect(map["ttys019"]?.displayWorkspaceTitle == "trusthere")
-        #expect(map["ttys033"]?.displayWorkspaceTitle == "/Users/stig/git/stigsb/op-who")
+        let map = CmuxHelper.parseSessionFileByPanelID(CmuxSessionByPanelIDTests.sessionFixtureJSON)
+        #expect(map["EB114B2A-5372-40B3-A6A1-913D96A2FEA3"]?.displayWorkspaceTitle == "applicant-tracker")
     }
 
     @Test func displayFallsBackToDescriptionForGenericTitle() {
-        // Workspace 3 has no customTitle and processTitle="Terminal 7" (generic).
-        // displayWorkspaceTitle should be "" (description also generic).
+        // Generic workspace title with a distinct description.
         let info = CmuxSurfaceInfo(
-            workspaceRef: "workspace:0:2",
+            workspaceRef: "",
             workspaceTitle: "Terminal 7",
             workspaceDescription: nil,
-            surfaceRef: "surface:panel-4",
-            surfaceTitle: "anything",
-            tty: "ttys077"
+            surfaceRef: "",
+            surfaceTitle: "anything"
         )
         #expect(info.displayWorkspaceTitle == "")
     }
 
     @Test func displayReturnsEmptyWhenGenericAndNoDescription() {
         let info = CmuxSurfaceInfo(
-            workspaceRef: "workspace:1",
+            workspaceRef: "",
             workspaceTitle: "Item-0",
             workspaceDescription: nil,
-            surfaceRef: "surface:1",
-            surfaceTitle: "anything",
-            tty: "ttys001"
+            surfaceRef: "",
+            surfaceTitle: "anything"
         )
         #expect(info.displayWorkspaceTitle == "")
     }

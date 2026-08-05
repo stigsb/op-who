@@ -165,7 +165,7 @@ struct DetailsYAMLTests {
             surface = CmuxSurfaceInfo(
                 workspaceRef: "ws", workspaceTitle: workspace?.0 ?? "",
                 surfaceRef: "sf", surfaceTitle: tab?.0 ?? "",
-                tty: "/dev/ttys002", workspaceIndex: 1, tabIndex: 1
+                workspaceIndex: 1, tabIndex: 1
             )
         }
         return OverlayPanel.ProcessEntry(
