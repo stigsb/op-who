@@ -46,8 +46,7 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceRef: "workspace:11",
             workspaceTitle: "trusthere",
             surfaceRef: "surface:25",
-            surfaceTitle: "main",
-            tty: "ttys021"
+            surfaceTitle: "main"
         )
         let text = OverlayPanel.terminalRowText(
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
@@ -65,8 +64,7 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceTitle: "Item-0",
             workspaceDescription: nil,
             surfaceRef: "surface:99",
-            surfaceTitle: "",
-            tty: "ttys077"
+            surfaceTitle: ""
         )
         let text = OverlayPanel.terminalRowText(
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
@@ -81,8 +79,7 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceTitle: "Item-0",
             workspaceDescription: "scratch experiments",
             surfaceRef: "surface:99",
-            surfaceTitle: "main",
-            tty: "ttys077"
+            surfaceTitle: "main"
         )
         let text = OverlayPanel.terminalRowText(
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
@@ -97,8 +94,7 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceRef: "workspace:11",
             workspaceTitle: "trusthere",
             surfaceRef: "surface:99",
-            surfaceTitle: "Item-1",
-            tty: "ttys021"
+            surfaceTitle: "Item-1"
         )
         let text = OverlayPanel.terminalRowText(
             entry: entry(cmuxSurface: s, terminalBundleID: "com.cmuxterm.app"),
@@ -214,7 +210,6 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceTitle: "trusthere",
             surfaceRef: "surface:25",
             surfaceTitle: "main",
-            tty: "ttys021",
             workspaceIndex: 2,
             tabIndex: 1
         )
@@ -233,7 +228,6 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceTitle: "trusthere",
             surfaceRef: "surface:25",
             surfaceTitle: "main",
-            tty: "ttys021",
             workspaceIndex: 2,
             tabIndex: 1,
             workspaceTabCount: 1
@@ -251,7 +245,6 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceTitle: "trusthere",
             surfaceRef: "surface:25",
             surfaceTitle: "main",
-            tty: "ttys021",
             workspaceIndex: 2,
             tabIndex: 1,
             workspaceTabCount: 3
@@ -270,7 +263,6 @@ struct OverlayPanelTerminalRowTextTests {
             workspaceTitle: "trusthere",
             surfaceRef: "surface:25",
             surfaceTitle: "main",
-            tty: "ttys021",
             workspaceIndex: 0,
             tabIndex: 3
         )
