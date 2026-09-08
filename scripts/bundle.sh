@@ -43,6 +43,17 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 cp "$BUILD_DIR/$PRODUCT" "$APP_DIR/Contents/MacOS/"
 cp Sources/OpWhoLib/Info.plist "$APP_DIR/Contents/"
 
+# SPM resource bundle (the popup alert sound). `Bundle.module` finds it via
+# Bundle.main's resource directory, so it must land in Contents/Resources —
+# and, like Info.plist, before signing, or the signature won't cover it.
+RESOURCE_BUNDLE="OpWho_OpWhoLib.bundle"
+if [[ -d "$BUILD_DIR/$RESOURCE_BUNDLE" ]]; then
+    mkdir -p "$APP_DIR/Contents/Resources"
+    cp -R "$BUILD_DIR/$RESOURCE_BUNDLE" "$APP_DIR/Contents/Resources/"
+else
+    echo "Warning: $RESOURCE_BUNDLE not found in $BUILD_DIR — popup sound will be silent." >&2
+fi
+
 # Version stamping (must happen before signing so the signature binds the
 # final Info.plist). On an exact vX.X.X release tag, keep the Info.plist
 # version. On any other commit — a local dev build — overwrite
