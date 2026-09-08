@@ -15,6 +15,7 @@ public final class AppSettings {
         static let popupMonoFontName = "popupMonoFontName"
         static let popupFontBaseSize = "popupFontBaseSize"
         static let popupColorOverrides = "popupColorOverrides"
+        static let popupSound = "popupSound"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -61,6 +62,13 @@ public final class AppSettings {
     public var popupColorOverrides: [String: String] {
         get { (defaults.dictionary(forKey: Key.popupColorOverrides) as? [String: String]) ?? [:] }
         set { defaults.set(newValue, forKey: Key.popupColorOverrides) }
+    }
+
+    /// `PopupSound.id` played when the overlay appears. Default: the bundled
+    /// triple tone. Resolve via `PopupSound.resolve(id:)`.
+    public var popupSoundID: String {
+        get { defaults.string(forKey: Key.popupSound) ?? PopupSound.tripleTone.id }
+        set { defaults.set(newValue, forKey: Key.popupSound) }
     }
 
     private static func clampSize(_ v: Double) -> Double { min(24, max(9, v)) }

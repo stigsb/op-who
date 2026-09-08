@@ -94,6 +94,17 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let replacesActorInfo = NSImageView()
     private let isWarningCheckbox = NSButton(checkboxWithTitle: "Render as warning", target: nil, action: nil)
     private let kindPopup = NSPopUpButton()
+    private let soundPopup = NSPopUpButton()
+    private let soundPlayButton: NSButton = {
+        let b = NSButton(title: "Play", target: nil, action: nil)
+        b.bezelStyle = .rounded
+        b.controlSize = .small
+        return b
+    }()
+    /// Catalog backing `soundPopup`. Item 0 of the popup is "Default"
+    /// (rule.soundID == nil); item N+1 is `soundCatalog[N]`. Mapped by index,
+    /// not title, so a system sound named "Default" can't collide.
+    private let soundCatalog = PopupSound.catalog()
     private let detailBox = NSBox()
     private let builtInNotice = NSTextField(
         labelWithString: "Built-in rule — read-only. Use “+ → Clone Selected Rule” to make an editable copy."
@@ -105,7 +116,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// and comment text views aren't NSControls, so they're toggled
     /// separately in `setEditable`.
     private var editableControls: [NSControl] {
-        [templateField, kindPopup, replacesActorCheckbox, isWarningCheckbox]
+        [templateField, kindPopup, soundPopup, replacesActorCheckbox, isWarningCheckbox]
     }
 
     private(set) lazy var view: NSView = makeContentView()
@@ -303,6 +314,14 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         kindPopup.target = self
         kindPopup.action = #selector(detailChanged(_:))
 
+        soundPopup.removeAllItems()
+        soundPopup.addItem(withTitle: "Default")
+        soundPopup.addItems(withTitles: soundCatalog.map(\.title))
+        soundPopup.target = self
+        soundPopup.action = #selector(detailChanged(_:))
+        soundPlayButton.target = self
+        soundPlayButton.action = #selector(playSelectedSound(_:))
+
         replacesActorCheckbox.target = self
         replacesActorCheckbox.action = #selector(detailChanged(_:))
         isWarningCheckbox.target = self
@@ -338,6 +357,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         grid.addRow(with: [label("Preview"), templatePreview])
         grid.addRow(with: [label("Comment"), commentScroll])
         grid.addRow(with: [label("Kind"), kindPopup])
+        grid.addRow(with: [label("Sound"), makeSoundRow()])
         grid.addRow(with: [NSView(), makeReplacesActorRow()])
         grid.addRow(with: [NSView(), isWarningCheckbox])
         grid.addRow(with: [NSView(), builtInNotice])
@@ -365,6 +385,23 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// Pack the "Replaces actor" checkbox alongside the info button so
     /// they read as one unit, with the info hugging the checkbox's
     /// trailing edge.
+    private func makeSoundRow() -> NSView {
+        let row = NSStackView(views: [soundPopup, soundPlayButton])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    /// Audition the selected sound. Works for built-ins too — playing is not
+    /// an edit, so it stays enabled when the form is read-only.
+    @objc private func playSelectedSound(_ sender: NSButton) {
+        let index = soundPopup.indexOfSelectedItem - 1
+        let sound = soundCatalog.indices.contains(index)
+            ? soundCatalog[index]
+            : PopupSound.resolve(id: AppSettings().popupSoundID)
+        sound.play()
+    }
+
     private func makeReplacesActorRow() -> NSView {
         let row = NSStackView(views: [replacesActorCheckbox, replacesActorInfo])
         row.orientation = .horizontal
@@ -792,6 +829,10 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
            let kind = RequestKind(rawValue: raw) {
             rule.kind = kind
         }
+        let soundIndex = soundPopup.indexOfSelectedItem - 1
+        rule.soundID = soundCatalog.indices.contains(soundIndex)
+            ? soundCatalog[soundIndex].id
+            : nil
         var rules = store.userRules
         rules[idx] = rule
         store.setUserRules(rules)
@@ -973,6 +1014,9 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         replacesActorCheckbox.state = rule.replacesActor ? .on : .off
         isWarningCheckbox.state = rule.isWarning ? .on : .off
         kindPopup.selectItem(withTitle: rule.kind.rawValue)
+        soundPopup.selectItem(at: rule.soundID
+            .flatMap { id in soundCatalog.firstIndex { $0.id == id } }
+            .map { $0 + 1 } ?? 0)
 
         // Surface any parse error on the loaded predicate so the user
         // sees what's wrong without having to type into the field first.
@@ -1001,6 +1045,7 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         replacesActorCheckbox.state = .off
         isWarningCheckbox.state = .off
         kindPopup.selectItem(withTitle: RequestKind.unknown.rawValue)
+        soundPopup.selectItem(at: 0)
         builtInNotice.isHidden = true
         detailBox.title = "Selected rule"
     }

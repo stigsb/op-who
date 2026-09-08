@@ -350,7 +350,8 @@ public class OnePasswordWatcher {
                 matchedRuleID: matchResult?.rule.id,
                 matchedRuleName: matchResult?.rule.name,
                 matchedBuiltInID: matchResult?.rule.builtInID,
-                gitContext: gitCtx
+                gitContext: gitCtx,
+                soundID: matchResult?.rule.soundID
             )
 
             candidates.append(TriggerCandidate(
@@ -432,6 +433,13 @@ public class OnePasswordWatcher {
         overlayPanel?.densePopup = settings.densePopup
         overlayPanel?.style = PopupStyle(settings: settings)
         overlayPanel?.show(entries: entries, near: windowFrame)
+        // Only here, not in OverlayPanel.show — the Settings preview reuses
+        // that method and must stay silent. A matched rule's soundID wins
+        // over the global setting; nil falls through to it.
+        PopupSound.resolve(id: PopupSound.effectiveID(
+            ruleSoundID: entries.first?.soundID,
+            globalSoundID: settings.popupSoundID
+        )).play()
     }
 
     /// Poll to detect when the 1Password dialog closes.

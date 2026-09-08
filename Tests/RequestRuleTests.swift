@@ -401,6 +401,26 @@ struct StoresTests {
         let rule = try JSONDecoder().decode(RequestRule.self, from: minimal)
         #expect(rule.enabled == true)
         #expect(rule.comment == nil)
+        #expect(rule.soundID == nil)
+    }
+
+    @Test func ruleSoundIDRoundTrips() throws {
+        let rule = RequestRule(
+            name: "quiet",
+            predicate: "TRUEPREDICATE",
+            template: "x",
+            kind: .unknown,
+            soundID: PopupSound.off.id
+        )
+        let data = try JSONEncoder().encode(rule)
+        let decoded = try JSONDecoder().decode(RequestRule.self, from: data)
+        #expect(decoded.soundID == PopupSound.off.id)
+        #expect(decoded == rule)
+    }
+
+    /// Built-ins must not change anyone's sound out of the box.
+    @Test func builtInsCarryNoSoundOverride() {
+        #expect(RequestRule.builtIns.allSatisfy { $0.soundID == nil })
     }
 
     @Test func ruleStoreEnableAllBuiltInsClearsDisabledSet() {

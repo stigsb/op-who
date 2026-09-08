@@ -55,6 +55,10 @@ public class OverlayPanel {
         /// what lets `OnePasswordWatcher` supply a real value while every
         /// other call site keeps compiling with the `nil` default.
         var gitContext: GitContext? = nil
+        /// `soundID` of the matched rule, when it set one. Nil means the
+        /// global setting applies. Declared `var` with a default for the same
+        /// reason as `gitContext` above.
+        var soundID: String? = nil
     }
 
     public init() {}

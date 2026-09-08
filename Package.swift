@@ -14,8 +14,10 @@ let package = Package(
             name: "OpWhoLib",
             dependencies: ["OpWhoObjCShim"],
             path: "Sources/OpWhoLib",
-            exclude: ["Info.plist"],
+            exclude: ["Info.plist", "Resources/README.md"],
+            resources: [.process("Resources")],
             linkerSettings: [
+                .linkedFramework("AVFoundation"),
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("Security"),
             ]

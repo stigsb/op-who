@@ -46,7 +46,7 @@ If the cert is missing, `scripts/bundle.sh` falls back to ad-hoc signing and pri
 
 #### If Accessibility still breaks after rebuild
 
-Some macOS versions require the self-signed cert to be a *trusted* root for code signing:
+Mark the cert as a trusted root for code signing — some macOS versions require it:
 
 1. In **Keychain Access**, find the `op-who Local Dev` certificate (login keychain → My Certificates).
 2. Double-click it → expand **Trust** → set **Code Signing** to **Always Trust**.
@@ -63,7 +63,7 @@ Tests use Swift Testing (`import Testing`). Coverage centers on the pure logic: 
 
 ### Running tests without full Xcode
 
-With only the Command Line Tools installed (no `Xcode.app`), `swift test` fails — first with `no such module 'Testing'`, then, once the framework search path is supplied, with a `dlopen` failure for `@rpath/lib_TestingInterop.dylib`. The swift-testing framework ships with the CLT but isn't on the default import/rpath search paths. Point the compiler and linker at it:
+With only the Command Line Tools installed (no `Xcode.app`), `swift test` fails: the swift-testing framework ships with the CLT but isn't on the default import or rpath search paths. Point the compiler and linker at it:
 
 ```bash
 FW=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
@@ -117,8 +117,6 @@ The tag push triggers `.github/workflows/release-notarized.yml`, which runs on `
 - publishes the GitHub Release with both artifacts and an `## Install` section from `.github/release-install-template.md`,
 - updates the `op-who` cask in `stigsb/homebrew-tap`.
 
-That's the whole release — there's no manual build or upload step.
-
 #### Required GitHub Actions secrets
 
 These live in the **`release` GitHub Environment**, not as repo-level secrets. The environment's deployment policy only permits the `v*` tag and the `main` branch, so a pull request — from a fork or an in-repo branch — can never run a workflow that reads them. Set each with `gh secret set <NAME> --env release`:
@@ -150,14 +148,6 @@ Each release produces two distributables from the same signed, notarized `op-who
 
   Accessibility (and Apple Events for Terminal/iTerm2) can be pre-granted on managed Macs via the PPPC profile in the `fleet-config` repo — keyed on Team ID `HZ76GWS9YM`, so it only matches Developer ID–signed builds.
 
-See [docs/cert-sign-guide.md](docs/cert-sign-guide.md) for certificate setup and how the CI secrets are produced.
-
 ## Install (end users)
 
-op-who is a notarized, Developer ID–signed app installed via Homebrew:
-
-```bash
-brew install --cask stigsb/tap/op-who
-```
-
-See the [README](README.md#install) for the manual `.zip` / `.pkg` alternatives.
+See the [README](README.md#install) — Homebrew cask, plus the manual `.zip` / `.pkg` alternatives.

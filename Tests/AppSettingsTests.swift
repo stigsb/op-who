@@ -85,4 +85,12 @@ struct AppSettingsTests {
         AppSettings(defaults: d).popupColorOverrides = ["claude": "#AABBCC"]
         #expect(AppSettings(defaults: d).popupColorOverrides["claude"] == "#AABBCC")
     }
+
+    @Test("popup sound defaults to the triple tone and persists")
+    func popupSound() {
+        let d = freshDefaults()
+        #expect(AppSettings(defaults: d).popupSoundID == PopupSound.tripleTone.id)
+        AppSettings(defaults: d).popupSoundID = PopupSound.off.id
+        #expect(AppSettings(defaults: d).popupSoundID == PopupSound.off.id)
+    }
 }

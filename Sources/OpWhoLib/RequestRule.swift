@@ -90,6 +90,10 @@ public struct RequestRule: Codable, Equatable, Identifiable {
     /// across releases once shipped — renaming a builtIn means picking
     /// a new ID counts as removing the old one for users who disabled it.
     public var builtInID: String?
+    /// `PopupSound.id` to play when this rule wins, overriding the global
+    /// setting. Nil (the default, and the value for every built-in) means
+    /// "use the global setting"; `PopupSound.off.id` silences this rule.
+    public var soundID: String?
 
     public init(
         id: UUID = UUID(),
@@ -101,7 +105,8 @@ public struct RequestRule: Codable, Equatable, Identifiable {
         isWarning: Bool = false,
         comment: String? = nil,
         enabled: Bool = true,
-        builtInID: String? = nil
+        builtInID: String? = nil,
+        soundID: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -113,6 +118,7 @@ public struct RequestRule: Codable, Equatable, Identifiable {
         self.comment = comment
         self.enabled = enabled
         self.builtInID = builtInID
+        self.soundID = soundID
     }
 
     /// Decoder that treats missing `enabled` / `comment` as defaults so
@@ -129,11 +135,12 @@ public struct RequestRule: Codable, Equatable, Identifiable {
         self.comment = try c.decodeIfPresent(String.self, forKey: .comment)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         self.builtInID = try c.decodeIfPresent(String.self, forKey: .builtInID)
+        self.soundID = try c.decodeIfPresent(String.self, forKey: .soundID)
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, predicate, template, replacesActor, kind, isWarning
-        case comment, enabled, builtInID
+        case comment, enabled, builtInID, soundID
     }
 }
 
