@@ -20,6 +20,8 @@ flowchart TB
 
     subgraph lib[OpWhoLib]
         watcher["OnePasswordWatcher<br/>AXObserver + dialog lifecycle"]
+        oidc["OidcLoginWatcher + OidcLogin<br/>distributed notification"]
+        builder["TriggerEntryBuilder<br/>entry context"]
         ptree["ProcessTree<br/>sysctl + chain walk + signing"]
         cand["CandidateSelection<br/>foldOpHelper + selectBestCandidate"]
         rules["RequestRule(Engine/Store)<br/>+ RecentRequestsStore"]
@@ -53,6 +55,13 @@ flowchart TB
     ptree --> redact
     claude --> redact
     watcher --> overlay
+    main --> oidc
+    watcher --> builder
+    oidc --> builder
+    oidc --> ptree
+    oidc --> overlay
+    builder --> rules
+    builder --> summary
     overlay --> term
     overlay --> ptree
     summary --> rules
@@ -75,9 +84,11 @@ flowchart TB
 
 Module responsibilities at a glance:
 
-- **`main.swift`** — bootstraps `NSApplication`, installs the status bar item and an Edit-menu-bearing main menu, requests Accessibility permission (with restart-on-grant polling), instantiates `RequestRuleStore`, `RecentRequestsStore`, and `OnePasswordWatcher`. Its status-bar menu also carries "About op-who", "Check for Updates…", "Settings…", and "Quit op-who".
+- **`main.swift`** — bootstraps `NSApplication`, installs the status bar item and an Edit-menu-bearing main menu, requests Accessibility permission (with restart-on-grant polling), instantiates `RequestRuleStore`, `RecentRequestsStore`, `OnePasswordWatcher`, and `OidcLoginWatcher`. Its status-bar menu also carries "About op-who", "Check for Updates…", "Settings…", and "Quit op-who".
 - **`ConfigWindowController` + `RulesPane` + `GeneralPane` + `AddRuleSheetController` + `TestPredicateSheetController`** — Settings UI. Single scrollable pane with a unified user-+-built-in rules table, a detail form (name, predicate, template, kind, comment), the "Replaces actor" toggle, a live template preview, syntax-highlighted predicate editing, identifier/keyword autocomplete, and a sheet for replaying a draft predicate against the recent-requests ring buffer.
 - **`OnePasswordWatcher`** — attaches an `AXObserver` to 1Password, classifies window events as approval dialogs, assembles candidate entries, runs the rule engine, records to the ring buffer, displays the chosen entry, and polls for dismissal.
+- **`OidcLoginWatcher` / `OidcLogin`** — shows the overlay for kubelogin OIDC logins announced by `oidc-browser` over a distributed notification. `OidcLogin` holds the pure parts: notification parsing, kubelogin-helper detection, and the fixed ruleset (see §4.15).
+- **`TriggerEntryBuilder`** — builds one `ProcessEntry` from a chain: terminal tab, Claude session, cmux, git context, rule evaluation. Shared by both watchers so both overlays carry the same context.
 - **`ProcessTree`** — pure logic for process enumeration, parent-chain walking, app-boundary detection, code signature verification, CWD lookup, argv/env reads, start-time reads, and Claude Code detection.
 - **`CandidateSelection`** — `foldOpHelper` collapses the `op` biometric-helper child into its `op` parent, and `selectBestCandidate` ranks surviving candidates by kind then start time.
 - **`RequestRule` / `RequestRuleEngine` / `RequestRuleStore`** — the rule engine. NSPredicate-driven, first-match-wins, with placeholder-empty-means-fall-through semantics. Ships with a built-in ruleset; users can add their own and disable any built-in.
@@ -233,7 +244,7 @@ The longest-lived object in the app. Responsibilities:
 - **Attach/detach lifecycle** — observes `NSWorkspace.didLaunchApplicationNotification` and `…didTerminateApplicationNotification` for the two known 1Password bundle IDs (`com.1password.1password`, `com.agilebits.onepassword7`). On attach, verifies the running 1Password's code signature against Apple Team ID `2BUA8C4S2C` *before* registering the AX observer — this prevents a maliciously-renamed process from receiving AX notifications.
 - **AX observer registration** — creates an `AXObserver` for the 1Password PID, subscribes to `kAXWindowCreatedNotification` and `kAXFocusedWindowChangedNotification`, and adds the observer's run loop source to `CFRunLoopGetMain()` so callbacks fire on the main thread.
 - **Approval-dialog classification** — `isApprovalDialog(_:)` (see §3.2).
-- **Candidate assembly** — for each trigger process: walk the chain, fold the `op` biometric-helper child into its parent via `foldOpHelper`, look up argv via `processArgv` and scrub it with `redactArgv` (see §4.14), drop non-network `git` triggers, look up terminal tab info, extract Claude session/context, look up the trigger CWD and `bestCWD`, detect a Claude plugin update if it's a `git` trigger under `~/.claude/plugins/`, read cmux workspace/surface info when running under cmux, run the matcher engine, build a `ProcessEntry` carrying the matched rule's id/name/builtInID and the rendered summary.
+- **Candidate assembly** — for each trigger process: walk the chain, fold the `op` biometric-helper child into its parent via `foldOpHelper`, look up argv via `processArgv` and scrub it with `redactArgv` (see §4.14), drop non-network `git` triggers, then hand the chain to `TriggerEntryBuilder.makeEntry`, which looks up terminal tab info, Claude session/context, the trigger CWD and `bestCWD`, a Claude plugin update, cmux workspace/surface info, runs the matcher engine, and returns a `ProcessEntry` carrying the matched rule's id/name/builtInID and the rendered summary.
 - **Candidate ranking** — `selectBestCandidate` (see §4.4).
 - **Ring buffer record** — every shown candidate (after ranking) is appended to the `RecentRequestsStore`.
 - **Re-show suppression** — when `handleWindowEvent` fires for a PID already being polled, the watcher refreshes the cached AX element and skips the overlay re-render.
@@ -258,6 +269,8 @@ Two pure functions used by the watcher.
 
 Within the same rank, the *oldest* (earliest start time) wins. 1Password queues approval requests in arrival order, so the oldest pending request is the one the dialog is for; newer processes are usually downstream consequences.
 
+`RequestKind.oidcLogin` never reaches ranking (OIDC entries do not go through `selectBestCandidate`); `kindRank` lists it only to stay exhaustive.
+
 ### 4.5 `ProcessTree` — process discovery and chain walking
 
 A pure namespace (`enum`, no instances). All functions are static and side-effect-free, which makes the bulk of the testable surface live here.
@@ -272,6 +285,8 @@ Key responsibilities:
   - `isSignedByOnePassword(path:)` uses `SecStaticCodeCreateWithPath` (on-disk binary) and is used to badge `op` processes in the overlay (verified = green, unverified = orange).
 
   Both check the same requirement: `anchor apple generic and certificate leaf[subject.OU] = "2BUA8C4S2C"`.
+- **Requesting app** — `buildChain` records the app it stopped at as `ChainResult.appBundleID` / `appPID`, for every app, not only terminals. A terminal helper counts as its terminal app. When the app's bundle is nested inside another `.app` (Electron and Chromium helpers), the outermost bundle is reported (`outermostApp`). `appDisplayName` turns a bundle ID into the name shown in the overlay.
+- **Kernel executable path** — `kernelExecutablePath(pid:)` wraps `proc_pidpath`. It is the only identity used for the kubelogin trust check, because argv[0] and the `KERN_PROCARGS2` exec path live in process memory and the `kinfo_proc` name is truncated to 16 characters.
 - **Per-process reads via `proc_pidinfo`** — `processCWD(pid:)` (PROC_PIDVNODEPATHINFO), `processStartTime(pid:)` (PROC_PIDTBSDINFO, used for candidate ranking). Direct kernel queries are preferred over `lsof` because some terminal multiplexers cause `lsof` to return stale or wrong CWDs.
 - **Per-process reads via `sysctl KERN_PROCARGS2`** — `processArgv(pid:)` returns the full argv (used by the rule engine and the git-network filter), and `processEnvironment(pid:, names:)` extracts the specific env vars cmux sets (`CMUX_WORKSPACE_ID`, `CMUX_TAB_ID`).
 - **Claude Code detection** — Claude Code ships in two flavors: a Bun-based standalone binary (Homebrew install, process name `claude`) and a Node CLI (npm install, process name `node`). We support both. First check for a process literally named `claude` in the chain — this catches the Homebrew/Bun build. If none, fall back to scanning any `node` processes in the chain and asking `KERN_PROCARGS2` whether their argv contains `claude` or `@anthropic` — this catches the npm build. The session name is then resolved via `claudeSessionInfo(pid:)`, which reads the process CWD via `proc_pidinfo` and returns the basename. The Bun build does not keep session JSONL files open as long-lived file descriptors, so any approach based on scanning `lsof` output for `.claude/projects/` paths would miss them; the CWD basename is a stable proxy for both flavors.
@@ -309,6 +324,7 @@ Given a captured request, builds the user-visible `(title, subtitle, kind, isWar
 - Computes the **actor** prefix from chain / claude session / terminal / cmux info. Examples: `Claude Code in cmux workspace 'work'`, `iTerm tab 'build'`, `Your zsh shell`, `Process 12345`. Generic shell prompts and cmux's `Item-N` AX placeholders are filtered out so they don't surface as actor text.
 - If the matched rule's `replacesActor` is true, the rendered template is the whole title; otherwise the title is `"<actor> <rendered>"`.
 - Builds a `subtitle` that includes session, terminal, and CWD where not already named in the title.
+- For an empty chain (OIDC login started by an app) the actor is the `appName` passed by `TriggerEntryBuilder`, or `An unknown process` without one. 1Password requests never pass `appName`.
 
 `previewTitle(rule:, recent:)` is the same machinery exposed to the Settings UI — it renders *a specific* rule against a captured `RecentRequest` regardless of which rule the engine would actually pick.
 
@@ -336,7 +352,12 @@ A non-activating `NSPanel` (`.nonactivatingPanel`, `level = .popUpMenu`, `isFloa
 - A `PID … TTY: … elapsed: Ns` detail line in tertiary color, updated every second by a shared timer while the overlay is up.
 - "Show Tab" and "Send Message" buttons, but only when a TTY is present.
 
-The panel is positioned just above the 1Password dialog using `axWindowFrame` (with AppKit/AX coordinate-system flip, anchored to the *primary* display's height — not `NSScreen.main`, which can be a non-primary screen on multi-monitor setups). If no frame is available, it falls back to slightly above screen-center.
+Placement is chosen by the caller through `show(entries:near:placement:)`. Both modes flip AX/CG top-left coordinates to AppKit using the *primary* display's height (not `NSScreen.main`, which can be a non-primary screen).
+
+- `.aboveWindow` (1Password): 8 pt above the dialog, centered on it. Without a frame, slightly above screen center.
+- `.insideBrowserWindow` (OIDC): centered horizontally on the browser window, bottom edge 16 pt above the window's bottom edge, never covering the top 120 pt (tabs and address bar). A window too short for that gets the overlay directly below it. The result is clamped to the visible frame of the screen containing the window. Without a frame, centered on the main screen. The math is the pure `browserOverlayOrigin`.
+
+OIDC entries (`ProcessEntry.source == .oidcLogin`) differ in three places: the action row shows the summary title in the `oidcLogin` color role, row 1 shows the requesting app's icon and name when the app is not a terminal, and the details tree is rooted at that app.
 
 ### 4.12 `TerminalHelper` — terminal app integration
 
@@ -379,6 +400,18 @@ Call sites (redaction happens at *capture*, so no downstream consumer ever sees 
 - `ProcessTree.detectScript` runs `redactString` over interpreter `-c` / `-e` inline-command snippets before truncation.
 - `ClaudeContext` runs `redactString` over the last user prompt and last relevant command **before** truncating them (so a secret split by truncation can't leak a partial).
 
+### 4.15 `OidcLoginWatcher` and `OidcLogin` — OIDC login overlay
+
+Design: [superpowers/specs/2026-11-23-oidc-login-overlay-design.md](superpowers/specs/2026-11-23-oidc-login-overlay-design.md).
+
+`oidc-browser` (sunstoneinstitute/cli-tools), kubelogin's `--browser-command`, posts the distributed notification `com.stigbakken.op-who.oidc-login` with `requesterPID` (kubelogin's PID) and an optional `frame` (`"x,y,w,h"`, CG global coordinates) of the browser window.
+
+- **Trust.** Distributed notifications do not identify the sender. The watcher takes only the PID and the frame from the message, ignores the message unless the PID's `proc_pidpath` basename is `kubectl-oidc_login` or `kubelogin`, and derives all displayed text from the live process tree. The frame only affects placement. A local process running as the user can still stage a fake kubelogin, so the overlay is context for a login the user started, not proof that a login page is legitimate.
+- **Chain.** `buildChain(from: requesterPID)`, then `OidcLogin.dropHelpers` removes the leading kubelogin nodes. The chain is empty when an app ran kubelogin itself; `TriggerEntryBuilder` then reads environment, TTY and CWD from the kubelogin process and the app becomes the actor. The 1Password short-chain filter is not applied.
+- **Rules.** `OidcLogin.rules` is fixed and not user-editable: `kubectl` → "needs a Kubernetes login for ‘{argv}’", empty chain → "needs an OIDC login", anything else → "needs an OIDC login (via ‘{process}’)". All use `RequestKind.oidcLogin`, which the Rules pane does not offer. OIDC requests are not recorded in the recent-requests ring buffer.
+- **Panel.** The watcher owns one `OverlayPanel` and reuses it, so at most one OIDC panel exists, next to at most one 1Password panel. A notification for the tracked PID is ignored; one for a different PID replaces the content and resets tracking.
+- **Dismissal.** `kill(requesterPID, 0)` every 500 ms. kubelogin exits when the login completes or times out.
+
 ## 5. Process-Chain Walking
 
 `ProcessTree.buildChain(from: pid_t)` is the algorithm at the heart of the app. Given a starting PID, it walks PPID links upward and assembles a `ChainResult`.
@@ -395,10 +428,10 @@ flowchart TB
     verify --> launchd{name == launchd?}
     launchd -- yes --> done([emit ChainResult])
     launchd -- no --> isApp{PID has bundleID?}
-    isApp -- yes --> recordTerm[if bundleID is a terminal:<br/>record terminalBundleID + PID]
+    isApp -- yes --> recordTerm[record appBundleID + appPID (outermost bundle)<br/>if bundleID is a terminal:<br/>record terminalBundleID + PID]
     recordTerm --> done
     isApp -- no --> isHelper{name matches a<br/>terminal-helper prefix?}
-    isHelper -- yes --> recordHelper[record terminalBundleID + PID]
+    isHelper -- yes --> recordHelper[record terminalBundleID + PID<br/>and appBundleID + appPID]
     recordHelper --> done
     isHelper -- no --> tty[if no TTY recorded yet:<br/>record this proc&apos;s TTY]
     tty --> claude[if name == &quot;claude&quot;:<br/>record claudePID]
@@ -416,7 +449,7 @@ flowchart TB
 
 Notable properties:
 
-- **Stops at app boundaries.** `NSWorkspace.shared.runningApplications` enumerates all GUI apps with bundle IDs. If the current PID has one, the walk stops *without* including that node — 1Password already shows the app name, so we'd be duplicating information. As a side effect we capture the terminal's bundle ID and PID for later use by `TerminalHelper`.
+- **Stops at app boundaries.** `NSWorkspace.shared.runningApplications` enumerates all GUI apps with bundle IDs. If the current PID has one, the walk stops *without* including that node — 1Password already shows the app name, so we'd be duplicating information. The app is recorded as `appBundleID` / `appPID` (outermost bundle when nested), and a terminal additionally as `terminalBundleID` / `terminalPID` for `TerminalHelper`. The OIDC overlay names the app, since a browser window does not.
 - **Stops at terminal helpers.** When the chain hits a process whose name matches a known terminal-helper prefix (e.g. `iTermServer-3.6.X`, which macOS truncates at MAXCOMLEN to look like garbage), record the matching terminal bundle ID and stop. The helper is the GUI app's stand-in for chain-attribution purposes.
 - **Stops at `launchd`.** Walking past PID 1 has no value.
 - **Cycle-safe.** A `visited: Set<pid_t>` and a `ppid == current` self-parent check guard against degenerate cases.
@@ -447,6 +480,8 @@ These are the non-obvious decisions a new contributor is most likely to question
 - **Redact secrets at capture, in layered pure functions.** Rationale: op-who surfaces argv, inline-command snippets, and Claude transcript text — all of which can contain a literal credential — in the overlay, the unified log, the rule engine, and the persisted ring buffer. Scrubbing once, at the point of capture (`redactArgv`/`redactString`), means no downstream consumer can leak a raw secret and there's no per-sink redaction to keep in sync. Three ordered layers (op-field assignments → known token shapes → high-entropy catch-all) trade a few false positives for defense in depth; `redactArgv` preserves argv count and order so parsers and predicates are unaffected. See §4.14.
 - **Install a main menu inside an `LSUIElement` app, for Edit shortcuts in Settings.** Rationale: text fields route Cmd-C/V/X/Z through the menu's responder chain, not the window. Without a main menu the Settings window's fields silently swallow those keystrokes. The menu only appears while op-who is active, so it doesn't intrude elsewhere.
 - **Re-sign the bundle ad-hoc with `CFBundleIdentifier` as the signing identifier.** Rationale: TCC keys Accessibility (and Automation) grants on the code signature's identifier. Without the bundle script re-signing with `Info.plist` in place, the identifier defaults to `swift build`'s per-build hash and the user has to re-grant Accessibility on every rebuild. See [CLAUDE.md](../CLAUDE.md) for the full rule.
+- **Identify kubelogin by `proc_pidpath`, and take only a PID from the OIDC notification.** Rationale: the notification is unauthenticated. The kernel's record of the executed file cannot be rewritten by the process, unlike argv[0] and the `KERN_PROCARGS2` exec path, and is not truncated like the `kinfo_proc` name. Deriving every displayed string from the process tree keeps a bare message from naming an arbitrary process.
+- **Fixed OIDC rules and a separate panel per watcher.** Rationale: the user-editable ruleset and the ring buffer exist to describe and test 1Password triggers. Each watcher reusing a single `OverlayPanel` bounds the screen to one overlay per source.
 - **`LSUIElement = true` in `Info.plist`.** Rationale: `op-who` is a menu bar utility — there's no main window, no dock presence, no app switcher entry. The `LSUIElement` flag is what makes that work.
 
 ## 7. Threading Model
@@ -479,9 +514,12 @@ Tests use Swift Testing (`import Testing`) and run via `swift test`. Coverage fo
 - **`ProcessTreeTests`** — `ProcessNode` display formatting, `formatChain` arrow-join, `tidyPath` HOME-substitution, `allProcesses` smoke test, `findOpProcesses` filtering.
 - **`OverlayPanelTests`** — pure helpers used by overlay rendering (terminal row composition, elapsed-time formatting).
 - **`ElapsedFormatTests`, `DebouncerTests`** — small leaf utilities.
+- **`OidcLoginTests`, `TriggerEntryBuilderTests`, `RequestingAppTests`** — notification parsing, kubelogin-helper detection and dropping with an injected path lookup, the three OIDC rules, entry building for empty and non-empty chains, outermost-bundle resolution, and app display names.
+- **`OidcOverlayRenderingTests`, `OverlayPlacementTests`, `OidcKindColorTests`** — OIDC body rows and lead-row app (and that 1Password entries are unchanged), the browser-window placement math, and the `oidcLogin` color role.
 
 Deliberately *not* unit-tested:
 
+- **`OidcLoginWatcher`** — notification delivery, the panel and the dismissal timer. Validated manually; its decisions live in tested pure functions.
 - **AX observer wiring (`OnePasswordWatcher`)** — the C-callback trampoline, observer registration, and live AX reads need a real 1Password process and approval dialog, and are validated manually. The pure decision logic *is* extracted and tested (`isApprovalWindow`, `shouldDismiss` — see above); only the AX plumbing around it is untested.
 - **Code signature checks** — depend on real signed binaries on the host. Validated by running against a real `op` install during release rehearsal.
 - **AppleScript paths in `TerminalHelper`** — depend on Terminal.app / iTerm2 being installed and scripting permissions being granted. Validated manually per terminal.

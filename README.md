@@ -46,6 +46,8 @@ After install, look for the op-who icon in your menu bar and grant Accessibility
 8. Shows a floating overlay positioned near the 1Password dialog
 9. Automatically dismisses the overlay when the dialog closes or trigger processes exit
 
+op-who also shows its overlay for Kubernetes OIDC logins started through `oidc-browser` from [sunstoneinstitute/cli-tools](https://github.com/sunstoneinstitute/cli-tools) (kubelogin's `--browser-command`). The overlay appears inside the browser window and names the app, terminal tab and command that needed the login, for example "Claude Code in cmux workspace ‘infra’ needs a Kubernetes login for ‘kubectl get pods -n demo’". It is context for a login you started, not proof that the login page is legitimate.
+
 ## Supported terminals
 
 | Terminal | Tab title lookup | Tab activation |

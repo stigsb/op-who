@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added: overlay for Kubernetes OIDC logins started by `oidc-browser`, shown inside the browser window and naming the app, terminal tab and command that needed the login. New `oidcLogin` popup color.
+
 ## [0.12.2] - 2026-07-13
 
 - Fixed: Claude Code commands prefixed with `cd /dir &&` now show the actual command, with the popup CWD set to that directory.
