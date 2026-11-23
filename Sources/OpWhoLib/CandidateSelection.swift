@@ -64,7 +64,8 @@ private func kindRank(_ kind: RequestKind) -> Int {
     switch kind {
     case .onePasswordCLI: return 0
     case .ssh:            return 1
-    case .unknown:        return 2
+    // OIDC entries never reach candidate ranking; the value only keeps the switch exhaustive.
+    case .unknown, .oidcLogin: return 2
     case .unverifiedOp:   return 3
     }
 }

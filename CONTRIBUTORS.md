@@ -22,10 +22,12 @@ Tests/                — Swift Testing unit tests
 ```bash
 swift build
 scripts/bundle.sh              # assemble .app bundle (debug)
-open .build/op-who.app
+open .build/op-who-dev.app
 ```
 
-Always launch the assembled bundle (`.build/op-who.app`), not the raw binary at `.build/debug/op-who` or `swift run op-who`. `scripts/bundle.sh` re-signs the bundle so the signature carries the stable `CFBundleIdentifier` (`com.stigbakken.op-who`) instead of the per-build hash (`op-who-<sha1>`) `swift build` assigns. Without that step, TCC treats each rebuild as a fresh app and re-prompts every time.
+Always launch the assembled bundle (`.build/op-who-dev.app`), not the raw binary at `.build/debug/op-who` or `swift run op-who`. `scripts/bundle.sh` re-signs the bundle so the signature carries the stable `CFBundleIdentifier` instead of the per-build hash (`op-who-<sha1>`) `swift build` assigns. Without that step, TCC treats each rebuild as a fresh app and re-prompts every time.
+
+The debug bundle has its own identity: bundle ID `com.stigbakken.op-who.dev`, name "op-who Dev". Its TCC grants, preferences and System Settings entries are separate from an installed release (`com.stigbakken.op-who`, possibly MDM-managed). Both share the rules file in `~/Library/Application Support/com.stigbakken.op-who/`. `scripts/bundle.sh release` builds `.build/op-who.app` with the release identity.
 
 ### Keeping the Accessibility grant across rebuilds
 
@@ -40,7 +42,7 @@ A one-time self-signed code-signing certificate makes the cert leaf the stable a
 5. Certificate Type: **Code Signing**.
 6. Click **Create**, then **Done**. The cert lands in your *login* keychain and is automatically trusted for code signing for your user.
 
-From the next `scripts/bundle.sh` run onward, the bundle is signed with that cert. Verify with `codesign -dvv .build/op-who.app` — output should include `Authority=op-who Local Dev` and no longer say `Signature=adhoc`. Then **launch op-who once and grant Accessibility one final time**; subsequent rebuilds will keep the grant.
+From the next `scripts/bundle.sh` run onward, the bundle is signed with that cert. Verify with `codesign -dvv .build/op-who-dev.app` — output should include `Authority=op-who Local Dev` and no longer say `Signature=adhoc`. Then **launch op-who once and grant Accessibility one final time**; subsequent rebuilds will keep the grant.
 
 If the cert is missing, `scripts/bundle.sh` falls back to ad-hoc signing and prints a warning. The bundle still works; you just have to re-grant after every clean rebuild.
 
@@ -51,7 +53,7 @@ Mark the cert as a trusted root for code signing — some macOS versions require
 1. In **Keychain Access**, find the `op-who Local Dev` certificate (login keychain → My Certificates).
 2. Double-click it → expand **Trust** → set **Code Signing** to **Always Trust**.
 3. Close the window (you'll be asked for your login password to write the change).
-4. `tccutil reset Accessibility com.stigbakken.op-who`, rebuild, relaunch, re-grant once.
+4. `tccutil reset Accessibility com.stigbakken.op-who.dev`, rebuild, relaunch, re-grant once.
 
 ## Testing
 

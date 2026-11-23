@@ -223,147 +223,18 @@ public class OnePasswordWatcher {
                 continue
             }
 
-            let tabInfo: TerminalHelper.TabInfo = result.tty.map { tty in
-                measure("tabInfo[\(tty)]") {
-                    TerminalHelper.tabInfo(
-                        forTTY: tty,
-                        terminalBundleID: result.terminalBundleID,
-                        terminalPID: result.terminalPID
-                    )
-                }
-            } ?? .empty
-            let tabTitle = tabInfo.name
-
-            let claudeSession: String?
-            let claudeCtx: ClaudeContext?
-            if let claudePID = result.claudePID {
-                claudeSession = measure("claudeSessionInfo") { ProcessTree.claudeSessionInfo(pid: claudePID) }
-                if let claudeCWD = measure("claudeCWD", { ProcessTree.processCWD(pid: claudePID) }) {
-                    claudeCtx = measure("claudeContext") { claudeContext(forCWD: claudeCWD) }
-                } else {
-                    claudeCtx = nil
-                }
-            } else {
-                claudeSession = nil
-                claudeCtx = nil
-            }
-
-            // Get CWD from the chain — the trigger process (op, ssh) often
-            // has CWD "/", so bestCWD walks to the first ancestor with a real
-            // directory (which is the dir a `cd /x && …` wrapper left behind).
-            let cwd = measure("bestCWD") { ProcessTree.bestCWD(chain: foldedChain) }
-                .map(ProcessTree.tidyPath)
-
-            // The trigger's own (untidied) CWD is needed by both plugin-update
-            // detection (must live under ~/.claude/plugins/) AND the matcher
-            // engine's `triggerCwdPrefix` predicate. Look it up once.
-            let triggerCWD = measure("processCWD[\(triggerPID)]") { ProcessTree.processCWD(pid: triggerPID) }
-
-            // Detect Claude Code background plugin/marketplace updates: a `git`
-            // trigger whose own CWD lives under ~/.claude/plugins/. We use the
-            // trigger's literal CWD (not bestCWD) because the surrounding chain
-            // may have a wider CWD that escapes the plugins tree.
-            let pluginUpdate: ClaudePluginUpdate? = {
-                guard triggerNode.name == "git" else { return nil }
-                return measure("claudePluginUpdate") {
-                    claudePluginUpdate(forCWD: triggerCWD)
-                }
-            }()
-
-            // For cmux, pull the workspace / tab identifiers from the trigger's
-            // env block AND resolve CMUX_SURFACE_ID against the session file
-            // for the user-facing workspace name and tab title — those are
-            // user-renameable and the env-IDs are not.
-            var cmuxWorkspaceID: String? = nil
-            var cmuxTabID: String? = nil
-            var cmuxSurface: CmuxSurfaceInfo? = nil
-            if isCmuxBundleID(result.terminalBundleID) {
-                let env = measure("processEnvironment[\(triggerPID)]") {
-                    ProcessTree.processEnvironment(
-                        pid: triggerPID,
-                        names: ["CMUX_WORKSPACE_ID", "CMUX_TAB_ID", "CMUX_SURFACE_ID"]
-                    )
-                }
-                cmuxWorkspaceID = env["CMUX_WORKSPACE_ID"]
-                cmuxTabID = env["CMUX_TAB_ID"]
-
-                // Env-first identification: the trigger's own env, then the
-                // chain walk-up (env vars are inherited; caffeinate-style
-                // children lack them but their parents don't). Nothing spawns
-                // here — env reads plus one cached file read.
-                let uuid = measure("cmuxSurfaceUUID[\(triggerPID)]") {
-                    CmuxHelper.surfaceUUID(forChain: foldedChain) { pid in
-                        pid == triggerPID
-                            ? env["CMUX_SURFACE_ID"]
-                            : ProcessTree.processEnvironment(
-                                  pid: pid, names: ["CMUX_SURFACE_ID"])["CMUX_SURFACE_ID"]
-                    }
-                }
-                cmuxSurface = uuid.flatMap { id in
-                    measure("cmuxSurfaceInfo[uuid]") { CmuxHelper.surfaceInfo(forSurfaceID: id) }
-                }
-
-                Log.cmux.info("trigger pid=\(triggerPID, privacy: .public) CMUX_SURFACE_ID=\(uuid ?? "<none>", privacy: .public) sessionHit=\(cmuxSurface != nil, privacy: .public) CMUX_WORKSPACE_ID=\(cmuxWorkspaceID ?? "<unset>", privacy: .public)")
-            }
-
-            // Run the matcher engine once here so the same evaluation drives
-            // candidate ranking, overlay rendering, ring-buffer recording,
-            // and the debug log dump. The matched rule's id/name and the
-            // rendered text are stored on the entry; downstream consumers
-            // read those fields rather than re-evaluating the rules.
-            let matchContext = MatchContext(
-                chain: foldedChain,
+            let entry = TriggerEntryBuilder.makeEntry(
+                foldedChain: foldedChain,
+                fallbackNode: triggerNode,
+                chainResult: result,
                 triggerArgv: triggerArgv,
-                cwd: cwd,
-                triggerCwd: triggerCWD,
-                claudeSession: claudeSession,
-                pluginUpdate: pluginUpdate,
-                terminalBundleID: result.terminalBundleID
-            )
-            let summary = makeRequestSummary(
-                chain: foldedChain,
-                triggerArgv: triggerArgv,
-                tabTitle: tabTitle,
-                claudeSession: claudeSession,
-                scriptInfo: result.scriptInfo,
-                terminalBundleID: result.terminalBundleID,
-                cwd: cwd,
-                triggerCwd: triggerCWD,
-                pluginUpdate: pluginUpdate
-            )
-            let matchResult = RequestRuleEngine.evaluate(rules: OpWhoConfig.rules, context: matchContext)
-
-            let gitCtx: GitContext? = cwd.flatMap { gitContext(forCwd: $0) }
-
-            let entry = OverlayPanel.ProcessEntry(
-                pid: triggerPID,
-                chain: foldedChain,
-                triggerArgv: triggerArgv,
-                tty: result.tty,
-                tabTitle: tabTitle,
-                tabShortcut: tabInfo.shortcut,
-                claudeSession: claudeSession,
-                claudeContext: claudeCtx,
-                scriptInfo: result.scriptInfo,
-                terminalBundleID: result.terminalBundleID,
-                terminalPID: result.terminalPID,
-                cwd: cwd,
-                triggerCwd: triggerCWD,
-                cmuxWorkspaceID: cmuxWorkspaceID,
-                cmuxTabID: cmuxTabID,
-                cmuxSurface: cmuxSurface,
-                pluginUpdate: pluginUpdate,
-                summary: summary,
-                matchedRuleID: matchResult?.rule.id,
-                matchedRuleName: matchResult?.rule.name,
-                matchedBuiltInID: matchResult?.rule.builtInID,
-                gitContext: gitCtx,
-                soundID: matchResult?.rule.soundID
+                rules: OpWhoConfig.rules,
+                source: .onePassword
             )
 
             candidates.append(TriggerCandidate(
                 entry: entry,
-                kind: summary.kind,
+                kind: entry.summary.kind,
                 startTime: ProcessTree.processStartTime(pid: triggerPID)
             ))
         }

@@ -50,25 +50,21 @@ struct DebouncerTests {
     }
 
     @Test func rescheduleResetsTimer() async {
-        // Schedule, wait a fraction of the interval, then reschedule before
-        // the first closure can fire. Only the most recent closure must run —
-        // the original is cancelled by the reschedule, even though a gap
-        // separated the two schedule calls.
-        //
-        // This is inherently a wall-clock race, and shared CI runners exhibit
-        // severe `Task.sleep` jitter (a sleep can overrun its nominal duration
-        // by 2-3x under load). Two things keep it robust: (1) a large interval
-        // relative to the inter-schedule gap (300ms vs 30ms, a 10x margin) so
-        // the first closure cannot fire before the reschedule even under heavy
-        // oversleep; (2) no mid-flight "hasn't fired yet" assertion — we check
-        // only the final value. [2] alone proves coalescing: if the reschedule
-        // had not cancelled the original we would observe [1, 2].
-        let debouncer = Debouncer(interval: 0.3, queue: Self.queue)
+        // A reschedule must cancel the pending closure even when a gap
+        // separates the two calls. The target queue is suspended during the
+        // gap so the first closure cannot run however long the gap takes,
+        // which removes the wall-clock race that failed on loaded CI runners.
+        let queue = DispatchQueue(label: "DebouncerTests.reschedule")
+        queue.suspend()
+        let debouncer = Debouncer(interval: 0.05, queue: queue)
         let recorder = Recorder()
         debouncer.schedule { recorder.record(1) }
-        try? await Task.sleep(nanoseconds: 30_000_000) // 30ms << 300ms interval
+        try? await Task.sleep(nanoseconds: 100_000_000) // past the first deadline
         debouncer.schedule { recorder.record(2) }
-        try? await Task.sleep(nanoseconds: 500_000_000) // well past the second interval
+        queue.resume()
+        for _ in 0..<50 where recorder.values.isEmpty {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
         #expect(recorder.values == [2])
     }
 }

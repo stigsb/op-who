@@ -5,6 +5,7 @@ import os
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var watcher: OnePasswordWatcher!
+    var oidcWatcher: OidcLoginWatcher!
     var trustPollTimer: Timer?
 
     // Stores own on-disk state. The recent-requests store is passed to
@@ -94,6 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
 
         watcher = OnePasswordWatcher(recentStore: recentStore)
+        oidcWatcher = OidcLoginWatcher()
 
         if !trusted {
             startTrustPolling()

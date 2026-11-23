@@ -245,6 +245,14 @@ struct DetectScriptTests {
         #expect(!ProcessTree.isInterpreter(name: ""))
     }
 
+    @Test func claudeProcessNameCoversBothBuilds() {
+        #expect(ProcessTree.isClaudeProcessName("claude"))
+        #expect(ProcessTree.isClaudeProcessName("claude.exe"))
+        #expect(!ProcessTree.isClaudeProcessName("claude-code"))
+        #expect(!ProcessTree.isClaudeProcessName("node"))
+        #expect(!ProcessTree.isClaudeProcessName(""))
+    }
+
     @Test func pythonPositionalScript() {
         let info = ProcessTree.detectScript(
             interpreter: "python3",

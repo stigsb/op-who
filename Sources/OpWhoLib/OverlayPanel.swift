@@ -59,6 +59,14 @@ public class OverlayPanel {
         /// global setting applies. Declared `var` with a default for the same
         /// reason as `gitContext` above.
         var soundID: String? = nil
+        /// Which prompt this entry explains. Drives the "Send Message" text
+        /// and the OIDC-only rendering branches.
+        var source: RequestSource = .onePassword
+        /// The macOS app the chain stopped at (`ChainResult.appBundleID/appPID`).
+        var appBundleID: String? = nil
+        var appPID: pid_t? = nil
+        /// Display name of that app. Set for OIDC entries only.
+        var appName: String? = nil
     }
 
     public init() {}
@@ -118,7 +126,74 @@ public class OverlayPanel {
     /// would otherwise start the timer at its full age instead of 0).
     private var shownAt: Date = .distantPast
 
-    public func show(entries: [ProcessEntry], near windowFrame: CGRect?) {
+    /// Where `show` puts the panel relative to the window frame it is given.
+    public enum Placement {
+        /// 8 pt above the window (1Password dialogs).
+        case aboveWindow
+        /// Inside the window near its bottom edge (OIDC login pages).
+        case insideBrowserWindow
+    }
+
+    /// A screen's frames in AppKit coordinates.
+    struct ScreenGeometry {
+        let frame: NSRect
+        let visibleFrame: NSRect
+    }
+
+    /// Gap between the overlay's bottom edge and the browser window's.
+    static let browserBottomInset: CGFloat = 16
+    /// Top strip of a browser window (tabs + address bar) the overlay never
+    /// covers: the URL is what the user must check on a login page.
+    static let browserTopReserve: CGFloat = 120
+
+    /// Panel origin (AppKit coordinates) for a browser window given in CG
+    /// global coordinates. Centered horizontally, bottom edge
+    /// `browserBottomInset` above the window's bottom edge; directly below
+    /// the window when that would reach into the top `browserTopReserve`.
+    /// The result is clamped to the visible frame of the screen that
+    /// contains most of the window.
+    static func browserOverlayOrigin(
+        windowFrame: CGRect,
+        panelSize: NSSize,
+        primaryHeight: CGFloat,
+        screens: [ScreenGeometry]
+    ) -> NSPoint {
+        let window = NSRect(
+            x: windowFrame.origin.x,
+            y: primaryHeight - (windowFrame.origin.y + windowFrame.height),
+            width: windowFrame.width,
+            height: windowFrame.height
+        )
+        var x = window.midX - panelSize.width / 2
+        var y = window.minY + browserBottomInset
+        if y + panelSize.height > window.maxY - browserTopReserve {
+            y = window.minY - panelSize.height
+        }
+
+        func overlap(_ screen: ScreenGeometry) -> CGFloat {
+            let r = screen.frame.intersection(window)
+            return r.isNull ? 0 : r.width * r.height
+        }
+        var best: ScreenGeometry? = screens.first
+        for screen in screens.dropFirst() where overlap(screen) > overlap(best!) {
+            best = screen
+        }
+        if let visible = best?.visibleFrame {
+            x = max(visible.minX, min(x, visible.maxX - panelSize.width))
+            y = max(visible.minY, min(y, visible.maxY - panelSize.height))
+        }
+        return NSPoint(x: x, y: y)
+    }
+
+    static func centeredOrigin(panelSize: NSSize, in rect: NSRect) -> NSPoint {
+        NSPoint(x: rect.midX - panelSize.width / 2, y: rect.midY - panelSize.height / 2)
+    }
+
+    public func show(
+        entries: [ProcessEntry],
+        near windowFrame: CGRect?,
+        placement: Placement = .aboveWindow
+    ) {
 
         let panel = makePanel()
         self.panel = panel
@@ -139,28 +214,46 @@ public class OverlayPanel {
             height: fittingSize.height + 24
         )
 
+        // AX and CG use global coordinates with the origin at the top-left of
+        // the primary display, y growing down. AppKit uses the bottom-left of
+        // the primary display, y growing up. The flip MUST use the primary
+        // display's height — not NSScreen.main, which tracks keyboard focus
+        // and can be a non-primary screen on multi-monitor setups.
+        let primaryHeight = (NSScreen.screens.first { $0.frame.origin == .zero }
+            ?? NSScreen.screens.first
+            ?? NSScreen.main)?.frame.height ?? 0
+
         let origin: NSPoint
-        if let frame = windowFrame {
-            // AX uses CG global coordinates (origin = top-left of primary display, y grows down).
-            // AppKit uses bottom-left of primary display, y grows up. The flip MUST use the
-            // primary display's height — not NSScreen.main, which tracks keyboard focus and
-            // can be a non-primary screen on multi-monitor setups.
-            let primaryHeight = (NSScreen.screens.first { $0.frame.origin == .zero }
-                ?? NSScreen.screens.first
-                ?? NSScreen.main)?.frame.height ?? 0
+        switch (placement, windowFrame) {
+        case (.insideBrowserWindow, let frame?):
+            origin = Self.browserOverlayOrigin(
+                windowFrame: frame,
+                panelSize: panelSize,
+                primaryHeight: primaryHeight,
+                screens: NSScreen.screens.map {
+                    ScreenGeometry(frame: $0.frame, visibleFrame: $0.visibleFrame)
+                }
+            )
+        case (.insideBrowserWindow, nil):
+            origin = NSScreen.main.map {
+                Self.centeredOrigin(panelSize: panelSize, in: $0.visibleFrame)
+            } ?? NSPoint(x: 200, y: 400)
+        case (.aboveWindow, let frame?):
             let axBottom = frame.origin.y + frame.size.height
             let appKitY = primaryHeight - axBottom
             origin = NSPoint(
                 x: frame.origin.x + (frame.width - panelSize.width) / 2,
                 y: appKitY + frame.height + 8
             )
-        } else if let screen = NSScreen.main {
-            origin = NSPoint(
-                x: screen.frame.midX - panelSize.width / 2,
-                y: screen.frame.midY + 100
-            )
-        } else {
-            origin = NSPoint(x: 200, y: 400)
+        case (.aboveWindow, nil):
+            if let screen = NSScreen.main {
+                origin = NSPoint(
+                    x: screen.frame.midX - panelSize.width / 2,
+                    y: screen.frame.midY + 100
+                )
+            } else {
+                origin = NSPoint(x: 200, y: 400)
+            }
         }
 
         panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
@@ -389,7 +482,7 @@ public class OverlayPanel {
             msgBtn.font = NSFont.systemFont(ofSize: 11)
             msgBtn.target = self
             msgBtn.action = #selector(sendTTYMessage(_:))
-            msgBtn.cell?.representedObject = tty
+            msgBtn.cell?.representedObject = [tty, entry.source.rawValue]
             buttonStack.addArrangedSubview(msgBtn)
 
             stack.addArrangedSubview(buttonStack)
@@ -459,6 +552,7 @@ public class OverlayPanel {
         case .onePasswordCLI: return style.color(.verifiedOp)
         case .unverifiedOp:   return style.color(.unverifiedOp)
         case .ssh:            return style.color(.ssh)
+        case .oidcLogin:      return style.color(.oidcLogin)
         case .unknown:        return style.color(.brightValue)
         }
     }
@@ -488,8 +582,9 @@ public class OverlayPanel {
     /// it — those names are user-renameable and the env vars don't update.
     /// Fall back to NSAccessibility-derived tabTitle for non-cmux terminals.
     private func makeTerminalRow(_ entry: ProcessEntry) -> NSView {
-        let bundleID = entry.terminalBundleID
-        let termName = humanTerminalName(bundleID: bundleID) ?? "Unknown terminal"
+        let app = Self.leadRowApp(entry: entry)
+        let bundleID = app.bundleID
+        let termName = app.name
         let parts = Self.terminalRowParts(entry: entry, termName: termName)
 
         let row = NSStackView()
@@ -586,6 +681,26 @@ public class OverlayPanel {
         var main: String { title + qualifier + suffix }
     }
 
+    /// App shown in row 1 (icon + name). A known terminal always wins, so a
+    /// terminal request shows the app and its tab. Otherwise OIDC entries
+    /// show the requesting app; 1Password entries keep "Unknown terminal"
+    /// (the 1Password dialog already names the app).
+    static func leadRowApp(entry: ProcessEntry) -> (bundleID: String?, name: String) {
+        if let terminal = humanTerminalName(bundleID: entry.terminalBundleID) {
+            return (entry.terminalBundleID, terminal)
+        }
+        guard entry.source == .oidcLogin else { return (nil, "Unknown terminal") }
+        return (entry.appBundleID, entry.appName ?? "Unknown app")
+    }
+
+    /// Root node of the details process tree.
+    static func treeRoot(entry: ProcessEntry) -> (name: String?, pid: pid_t?) {
+        if entry.source == .oidcLogin, let name = entry.appName {
+            return (name, entry.appPID)
+        }
+        return (humanTerminalName(bundleID: entry.terminalBundleID), entry.terminalPID)
+    }
+
     /// Build the parts of row 1.
     static func terminalRowParts(entry: ProcessEntry, termName: String) -> TerminalRowParts {
         if let s = entry.cmuxSurface {
@@ -666,10 +781,8 @@ public class OverlayPanel {
     /// Render the parent-first process tree as a single monospaced label with
     /// `└─` connectors and PIDs in parens. The `op` node is colored.
     private func makeProcessTreeLabel(_ entry: ProcessEntry) -> NSTextField {
-        let appName = humanTerminalName(bundleID: entry.terminalBundleID)
-        let nodes = processTreeNodes(
-            appName: appName, appPID: entry.terminalPID, chain: entry.chain
-        )
+        let root = Self.treeRoot(entry: entry)
+        let nodes = processTreeNodes(appName: root.name, appPID: root.pid, chain: entry.chain)
         let font = style.font(.mono, weight: .regular, tier: .small)
         let out = NSMutableAttributedString()
         for (i, node) in nodes.enumerated() {
@@ -705,8 +818,10 @@ public class OverlayPanel {
     }
 
     @objc private func sendTTYMessage(_ sender: NSButton) {
-        guard let tty = sender.cell?.representedObject as? String else { return }
-        TerminalHelper.writeMessage(to: tty, message: "\n[op-who] 1Password approval requested from this session\n")
+        guard let info = sender.cell?.representedObject as? [String],
+              info.count == 2,
+              let source = RequestSource(rawValue: info[1]) else { return }
+        TerminalHelper.writeMessage(to: info[0], message: source.ttyMessage)
     }
 
     // MARK: - Color & icon

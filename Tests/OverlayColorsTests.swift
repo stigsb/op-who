@@ -15,7 +15,7 @@ struct OverlayColorsContrastTests {
     private let bodyColors: [NSColor] = [
         OverlayColors.claude, OverlayColors.editor,
         OverlayColors.verifiedOp, OverlayColors.unverifiedOp,
-        OverlayColors.ssh, OverlayColors.dimLabel,
+        OverlayColors.ssh, OverlayColors.oidcLogin, OverlayColors.dimLabel,
         OverlayColors.gitRoot, OverlayColors.branch, OverlayColors.worktree,
     ]
 
