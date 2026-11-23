@@ -30,7 +30,7 @@ Full list with rationale: [docs/architecture.md §6](docs/architecture.md#6-key-
 
 TCC keys Accessibility (and Automation) grants on the code signature's identifier, so `scripts/bundle.sh` re-signs the assembled `.app` after copying `Info.plist` into place — preferring the `op-who Local Dev` cert, falling back to ad-hoc. Without a re-sign the identifier is the per-build hash `swift build` assigns (`op-who-<sha1>`), which changes every rebuild.
 
-If you change `bundle.sh` or the release-signing flow, preserve this property: the assembled bundle must end up signed with its `CFBundleIdentifier` (`com.stigbakken.op-who`) as the signing identifier, and `Info.plist` must be in place *before* signing — otherwise `codesign -dvv` reports `Info.plist=not bound` and TCC re-prompts on every rebuild. Local cert setup: [CONTRIBUTORS.md](CONTRIBUTORS.md#keeping-the-accessibility-grant-across-rebuilds).
+If you change `bundle.sh` or the release-signing flow, preserve this property: the assembled bundle must end up signed with its `CFBundleIdentifier` (`com.stigbakken.op-who` for release, `com.stigbakken.op-who.dev` for debug) as the signing identifier, and `Info.plist`, including the debug identity edits, must be in place *before* signing — otherwise `codesign -dvv` reports `Info.plist=not bound` and TCC re-prompts on every rebuild. Local cert setup: [CONTRIBUTORS.md](CONTRIBUTORS.md#keeping-the-accessibility-grant-across-rebuilds).
 
 ## Testing
 
