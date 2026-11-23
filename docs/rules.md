@@ -131,7 +131,7 @@ subcommand IN {"fetch", "pull", "push", "clone"}
 
 ```
 ANY triggerArgv == "sign"
-ANY chainNames == "make"
+ANY chainNames == "claude"
 NONE triggerArgv BEGINSWITH "--debug"
 ```
 
