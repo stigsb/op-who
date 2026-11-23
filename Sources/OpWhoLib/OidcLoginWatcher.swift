@@ -11,6 +11,7 @@ public final class OidcLoginWatcher: NSObject {
     private let overlayPanel = OverlayPanel()
     private var trackedPID: pid_t?
     private var pollTimer: Timer?
+    private var showTimer: Timer?
 
     /// Must be created on the main thread: selector delivery for
     /// distributed notifications happens on the registering thread's run loop.
@@ -31,6 +32,7 @@ public final class OidcLoginWatcher: NSObject {
     deinit {
         DistributedNotificationCenter.default().removeObserver(self)
         pollTimer?.invalidate()
+        showTimer?.invalidate()
     }
 
     @objc private func receivedLoginNotification(_ note: Notification) {
@@ -50,9 +52,30 @@ public final class OidcLoginWatcher: NSObject {
             Log.watcher.info("oidc: ignored pid=\(pid, privacy: .public), not kubelogin")
             return
         }
+        // Show only if kubelogin outlives OidcLogin.showDelay.
+        trackedPID = pid
+        pollTimer?.invalidate()
+        pollTimer = nil
+        overlayPanel.dismiss()
+        showTimer?.invalidate()
+        showTimer = Timer.scheduledTimer(withTimeInterval: OidcLogin.showDelay, repeats: false) { [weak self] _ in
+            self?.showIfRequesterRunning(request)
+        }
+    }
+
+    private func showIfRequesterRunning(_ request: OidcLogin.Request) {
+        let pid = request.requesterPID
+        showTimer = nil
+        guard trackedPID == pid else { return }
+        guard kill(pid, 0) == 0 else {
+            Log.watcher.info("oidc: pid=\(pid, privacy: .public) exited within the show delay, no overlay")
+            trackedPID = nil
+            return
+        }
         let result = ProcessTree.buildChain(from: pid)
         guard let requester = result.chain.first, requester.pid == pid else {
             Log.watcher.info("oidc: ignored pid=\(pid, privacy: .public), no process chain")
+            trackedPID = nil
             return
         }
         // Empty when an app (IDE, Lens) ran kubelogin itself.
@@ -81,7 +104,6 @@ public final class OidcLoginWatcher: NSObject {
             ruleSoundID: nil, globalSoundID: settings.popupSoundID
         )).play()
 
-        trackedPID = pid
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.dismissIfRequesterExited()
