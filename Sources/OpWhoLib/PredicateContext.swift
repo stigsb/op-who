@@ -37,10 +37,10 @@ public final class PredicateContext: NSObject {
     @objc public let pluginUpdateAvailable: Bool
 
     public init(_ ctx: MatchContext) {
-        self.triggerName = ctx.triggerName
+        self.triggerName = Self.ruleName(ctx.triggerName)
         self.triggerArgv = ctx.triggerArgv
         self.subcommand = parseSubcommand(argv: ctx.triggerArgv)
-        self.chainNames = ctx.chain.map(\.name)
+        self.chainNames = ctx.chain.map { Self.ruleName($0.name) }
         self.cwd = ctx.cwd
         self.triggerCwd = ctx.triggerCwd
         self.binaryVerified = ctx.binaryVerified
@@ -51,6 +51,13 @@ public final class PredicateContext: NSObject {
         self.pluginSourceType = ctx.pluginUpdate?.sourceType
         self.pluginMarketplaceName = ctx.pluginUpdate?.marketplaceName
         self.pluginUpdateAvailable = (ctx.pluginUpdate != nil)
+    }
+
+    /// Process name as rules see it. Claude Code's native build runs as
+    /// `claude.exe`; rules see `claude` for every build so a rule matching
+    /// `"claude"` keeps working.
+    static func ruleName(_ name: String) -> String {
+        ProcessTree.isClaudeProcessName(name) ? "claude" : name
     }
 
     /// Stable list of the predicate keys this context exposes. The

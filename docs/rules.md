@@ -62,11 +62,11 @@ These are the identifiers a predicate can mention. Everything else is unknown to
 | `triggerName` | String | Short name of the trigger process (`op`, `git`, `ssh`, `op-ssh-sign`, …). This is `kinfo_proc`'s name — argv[0] isn't used. |
 | `triggerArgv` | [String] | Full argv of the trigger, with secret-looking tokens replaced by `‹redacted›` (see below). Use `ANY` / `ALL` to match elements. |
 | `subcommand` | String? | First non-flag argv token after argv[0] — `"push"` for `git -C /tmp push origin`. Honours `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace` pair-flags. |
-| `chainNames` | [String] | Names of every process in the chain, trigger first. |
+| `chainNames` | [String] | Names of every process in the chain, trigger first. Claude Code appears as `claude` for every build (the native build's `claude.exe` is reported as `claude`). |
 | `cwd` | String? | Tidied working directory found by walking up the chain. `nil` or `"/"` when nothing better was available. |
 | `triggerCwd` | String? | The trigger's *own* CWD, un-tidied. Good for prefix matches like `triggerCwd BEGINSWITH "~/.claude/plugins"`. |
 | `binaryVerified` | Bool | True iff the trigger is `op` and its on-disk binary is signed by 1Password's Apple Team ID. False for everything else. |
-| `claudeSession` | String? | Claude Code session name (project basename) when Claude was in the chain. |
+| `claudeSession` | String? | Claude Code session name (project basename) when Claude was in the chain. `claudeSession != nil` is the most reliable "came from Claude Code" test: it also covers the npm build, which runs as `node`. |
 | `terminalBundleID` | String? | Bundle ID of the terminal app (`com.apple.Terminal`, `com.googlecode.iterm2`, …). |
 | `pluginRemoteURL` | String? | Git remote URL when a Claude plugin update was detected. |
 | `pluginRepo` | String? | `org/repo` form of the plugin remote when resolvable. |
@@ -131,7 +131,7 @@ subcommand IN {"fetch", "pull", "push", "clone"}
 
 ```
 ANY triggerArgv == "sign"
-ANY chainNames == "claude"
+ANY chainNames == "make"
 NONE triggerArgv BEGINSWITH "--debug"
 ```
 

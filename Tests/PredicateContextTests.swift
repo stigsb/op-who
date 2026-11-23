@@ -38,6 +38,14 @@ struct PredicateContextTests {
         #expect(NSPredicate(format: "triggerName == %@", "ssh").evaluate(with: bridge()) == false)
     }
 
+    @Test func nativeClaudeBuildMatchesClaudeInRules() {
+        let ctx = bridge(chain: ["git", "bash", "claude.exe"])
+        #expect(NSPredicate(format: "ANY chainNames == %@", "claude").evaluate(with: ctx) == true)
+        #expect(ctx.chainNames == ["git", "bash", "claude"])
+        let claudeTrigger = bridge(chain: ["claude.exe"], argv: ["claude"])
+        #expect(NSPredicate(format: "triggerName == %@", "claude").evaluate(with: claudeTrigger) == true)
+    }
+
     @Test func anyOverArgvArray() {
         #expect(NSPredicate(format: "ANY triggerArgv == %@", "push").evaluate(with: bridge()) == true)
         #expect(NSPredicate(format: "ANY triggerArgv == %@", "pull").evaluate(with: bridge()) == false)
