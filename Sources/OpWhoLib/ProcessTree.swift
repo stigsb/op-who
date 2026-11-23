@@ -131,6 +131,12 @@ public enum ProcessTree {
         return allProcesses().filter { triggerNames.contains($0.name) }
     }
 
+    /// True for a Claude Code process name as `kinfo_proc` reports it: `claude`
+    /// (Homebrew/Bun build) or `claude.exe` (native installer build).
+    static func isClaudeProcessName(_ name: String) -> Bool {
+        name == "claude" || name == "claude.exe"
+    }
+
     /// Walk the parent chain from a PID, stopping at Mac app processes or launchd.
     public static func buildChain(from pid: pid_t) -> ChainResult {
         let all = allProcesses()
@@ -191,7 +197,7 @@ public enum ProcessTree {
             }
 
             // Detect Claude Code
-            if proc.name == "claude" {
+            if Self.isClaudeProcessName(proc.name) {
                 claudePID = proc.pid
             }
 
