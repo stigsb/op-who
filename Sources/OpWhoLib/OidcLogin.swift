@@ -4,7 +4,7 @@ import Foundation
 /// (sunstoneinstitute/cli-tools). See
 /// docs/superpowers/specs/2026-11-23-oidc-login-overlay-design.md.
 public enum OidcLogin {
-    public static let notificationName = Notification.Name("com.stigbakken.op-who.oidc-login")
+    public static let notificationName = Notification.Name("ai.sunstoneinstitute.oidc-browser.login-opened")
 
     /// Executable basenames of kubelogin.
     static let helperNames: Set<String> = ["kubectl-oidc_login", "kubelogin"]

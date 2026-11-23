@@ -13,7 +13,7 @@ browser window it posts a distributed notification:
 
 | Field | Value |
 |---|---|
-| name | `com.stigbakken.op-who.oidc-login` |
+| name | `ai.sunstoneinstitute.oidc-browser.login-opened` |
 | `userInfo["requesterPID"]` | decimal string, `getppid()` of oidc-browser, i.e. the kubelogin process |
 | `userInfo["frame"]` | optional, `"x,y,w,h"` of the browser window in CG global coordinates (top-left origin) |
 

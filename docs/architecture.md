@@ -404,7 +404,7 @@ Call sites (redaction happens at *capture*, so no downstream consumer ever sees 
 
 Design: [superpowers/specs/2026-11-23-oidc-login-overlay-design.md](superpowers/specs/2026-11-23-oidc-login-overlay-design.md).
 
-`oidc-browser` (sunstoneinstitute/cli-tools), kubelogin's `--browser-command`, posts the distributed notification `com.stigbakken.op-who.oidc-login` with `requesterPID` (kubelogin's PID) and an optional `frame` (`"x,y,w,h"`, CG global coordinates) of the browser window.
+`oidc-browser` (sunstoneinstitute/cli-tools), kubelogin's `--browser-command`, posts the distributed notification `ai.sunstoneinstitute.oidc-browser.login-opened` with `requesterPID` (kubelogin's PID) and an optional `frame` (`"x,y,w,h"`, CG global coordinates) of the browser window.
 
 - **Trust.** Distributed notifications do not identify the sender. The watcher takes only the PID and the frame from the message, ignores the message unless the PID's `proc_pidpath` basename is `kubectl-oidc_login` or `kubelogin`, and derives all displayed text from the live process tree. The frame only affects placement. A local process running as the user can still stage a fake kubelogin, so the overlay is context for a login the user started, not proof that a login page is legitimate.
 - **Chain.** `buildChain(from: requesterPID)`, then `OidcLogin.dropHelpers` removes the leading kubelogin nodes. The chain is empty when an app ran kubelogin itself; `TriggerEntryBuilder` then reads environment, TTY and CWD from the kubelogin process and the app becomes the actor. The 1Password short-chain filter is not applied.

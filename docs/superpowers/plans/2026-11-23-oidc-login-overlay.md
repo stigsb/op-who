@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Two repos. Tasks 1–8: op-who. Task 9: cli-tools at `~/git/sunstone/cli-tools`.
-- Notification name: `com.stigbakken.op-who.oidc-login`. userInfo keys `requesterPID` (decimal string) and optional `frame` (`"x,y,w,h"`, CG global coordinates, top-left origin). All values are strings.
+- Notification name: `ai.sunstoneinstitute.oidc-browser.login-opened`. userInfo keys `requesterPID` (decimal string) and optional `frame` (`"x,y,w,h"`, CG global coordinates, top-left origin). All values are strings.
 - A process is a kubelogin helper when the basename of its `proc_pidpath` executable path is `kubectl-oidc_login` or `kubelogin`. Never decide this from argv[0], the `KERN_PROCARGS2` exec path (`ProcessTree.executablePath` is that, do not use it), or `ProcessNode.name`.
 - 1Password overlays must not change: same text, same rows, same placement. Every OIDC-specific branch is gated on `RequestSource.oidcLogin` or on a parameter that defaults to the 1Password behavior.
 - `PopupLayout.swift` builders stay pure (no AppKit). `OverlayColors.swift` stays the only home of default colors. Trigger argv passes through `redactArgv` at capture.
@@ -996,7 +996,7 @@ import Foundation
 /// (sunstoneinstitute/cli-tools). See
 /// docs/superpowers/specs/2026-11-23-oidc-login-overlay-design.md.
 public enum OidcLogin {
-    public static let notificationName = Notification.Name("com.stigbakken.op-who.oidc-login")
+    public static let notificationName = Notification.Name("ai.sunstoneinstitute.oidc-browser.login-opened")
 
     /// Executable basenames of kubelogin.
     static let helperNames: Set<String> = ["kubectl-oidc_login", "kubelogin"]
@@ -1701,7 +1701,7 @@ Expected: build succeeds, all tests PASS.
 3. Post the notification for it from a second terminal:
    ```bash
    PID=$(pgrep -f 'kubectl-oidc_login get-token.*8124')
-   osascript -l JavaScript -e "ObjC.import('Foundation'); \$.NSDistributedNotificationCenter.defaultCenter.postNotificationNameObjectUserInfoDeliverImmediately('com.stigbakken.op-who.oidc-login', \$(), \$({requesterPID: '$PID', frame: '200,200,1000,700'}), true)"
+   osascript -l JavaScript -e "ObjC.import('Foundation'); \$.NSDistributedNotificationCenter.defaultCenter.postNotificationNameObjectUserInfoDeliverImmediately('ai.sunstoneinstitute.oidc-browser.login-opened', \$(), \$({requesterPID: '$PID', frame: '200,200,1000,700'}), true)"
    ```
 4. Expected: one overlay appears inside the rectangle x 200…1200, y 200…900 (top-left coordinates), centered horizontally, its bottom edge 16 pt above y 900. Row 1 shows the terminal's icon and tab. The action row reads "… needs an OIDC login (via ‘zsh’)" (kubectl `exec`s the plugin, so the trigger here is the interactive shell) in the `oidcLogin` color. It disappears within ~1 s of kubelogin timing out after 30 s.
 5. While it is showing, post the same notification again. Expected: nothing changes, the elapsed timer keeps counting.
@@ -1787,7 +1787,7 @@ OIDC entries (`ProcessEntry.source == .oidcLogin`) differ in three places: the a
 
 Design: [superpowers/specs/2026-11-23-oidc-login-overlay-design.md](superpowers/specs/2026-11-23-oidc-login-overlay-design.md).
 
-`oidc-browser` (sunstoneinstitute/cli-tools), kubelogin's `--browser-command`, posts the distributed notification `com.stigbakken.op-who.oidc-login` with `requesterPID` (kubelogin's PID) and an optional `frame` (`"x,y,w,h"`, CG global coordinates) of the browser window.
+`oidc-browser` (sunstoneinstitute/cli-tools), kubelogin's `--browser-command`, posts the distributed notification `ai.sunstoneinstitute.oidc-browser.login-opened` with `requesterPID` (kubelogin's PID) and an optional `frame` (`"x,y,w,h"`, CG global coordinates) of the browser window.
 
 - **Trust.** Distributed notifications do not identify the sender. The watcher takes only the PID and the frame from the message, ignores the message unless the PID's `proc_pidpath` basename is `kubectl-oidc_login` or `kubelogin`, and derives all displayed text from the live process tree. The frame only affects placement. A local process running as the user can still stage a fake kubelogin, so the overlay is context for a login the user started, not proof that a login page is legitimate.
 - **Chain.** `buildChain(from: requesterPID)`, then `OidcLogin.dropHelpers` removes the leading kubelogin nodes. The chain is empty when an app ran kubelogin itself; `TriggerEntryBuilder` then reads environment, TTY and CWD from the kubelogin process and the app becomes the actor. The 1Password short-chain filter is not applied.
@@ -1920,7 +1920,7 @@ func opWhoUserInfo(requesterPID: pid_t, bounds: [Int]?) -> [String: String] {
 /// Tells op-who, if running, which kubelogin process opened this login.
 func notifyOpWho(requesterPID: pid_t, bounds: [Int]?) {
     DistributedNotificationCenter.default().postNotificationName(
-        Notification.Name("com.stigbakken.op-who.oidc-login"),
+        Notification.Name("ai.sunstoneinstitute.oidc-browser.login-opened"),
         object: nil,
         userInfo: opWhoUserInfo(requesterPID: requesterPID, bounds: bounds),
         deliverImmediately: true
