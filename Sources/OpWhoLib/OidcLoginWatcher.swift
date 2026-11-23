@@ -6,28 +6,39 @@ import os
 /// The notification is unauthenticated: only the PID (and an optional
 /// window frame, used for placement) is taken from it, the PID must be a
 /// kubelogin process, and all displayed text comes from the live process tree.
-public final class OidcLoginWatcher {
-    private var observer: NSObjectProtocol?
+public final class OidcLoginWatcher: NSObject {
     /// The only OIDC panel. Reused for every request.
     private let overlayPanel = OverlayPanel()
     private var trackedPID: pid_t?
     private var pollTimer: Timer?
 
-    public init() {
-        observer = DistributedNotificationCenter.default().addObserver(
-            forName: OidcLogin.notificationName, object: nil, queue: .main
-        ) { [weak self] note in
-            guard let request = OidcLogin.parse(userInfo: note.userInfo) else {
-                Log.watcher.info("oidc: ignored malformed notification")
-                return
-            }
-            self?.handle(request)
-        }
+    /// Must be created on the main thread: selector delivery for
+    /// distributed notifications happens on the registering thread's run loop.
+    /// `.deliverImmediately` keeps delivery working while this accessory app
+    /// is inactive, regardless of how the sender posted.
+    public override init() {
+        super.init()
+        dispatchPrecondition(condition: .onQueue(.main))
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(receivedLoginNotification(_:)),
+            name: OidcLogin.notificationName,
+            object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
     }
 
     deinit {
-        if let observer { DistributedNotificationCenter.default().removeObserver(observer) }
+        DistributedNotificationCenter.default().removeObserver(self)
         pollTimer?.invalidate()
+    }
+
+    @objc private func receivedLoginNotification(_ note: Notification) {
+        guard let request = OidcLogin.parse(userInfo: note.userInfo) else {
+            Log.watcher.info("oidc: ignored malformed notification")
+            return
+        }
+        handle(request)
     }
 
     private func handle(_ request: OidcLogin.Request) {
