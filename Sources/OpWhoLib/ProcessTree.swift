@@ -39,6 +39,13 @@ public struct ChainResult {
     public let hasClaudeCode: Bool
     public let claudePID: pid_t?
     public let scriptInfo: ScriptInfo?
+    /// Bundle ID and PID of the macOS app the chain stopped at. For a bundle
+    /// nested inside another `.app` (Electron/Chromium helpers) this is the
+    /// outermost one. A terminal helper counts as its terminal app. nil when
+    /// the walk ended at launchd. `var` with a default so the memberwise
+    /// initializer keeps these parameters optional.
+    public var appBundleID: String? = nil
+    public var appPID: pid_t? = nil
 }
 
 /// What an interpreter or invoked command in the chain is running.
@@ -129,8 +136,7 @@ public enum ProcessTree {
         let all = allProcesses()
         let lookup = Dictionary(all.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
 
-        // Build a set of PIDs that are Mac apps, mapped to their bundle IDs
-        let appPIDs = macAppPIDs()
+        let apps = runningApps()
 
         var chain: [ProcessNode] = []
         var current = pid
@@ -139,6 +145,8 @@ public enum ProcessTree {
         var terminalBundleID: String? = nil
         var terminalPID: pid_t? = nil
         var claudePID: pid_t? = nil
+        var appBundleID: String? = nil
+        var appPID: pid_t? = nil
 
         while current > 0, var proc = lookup[current], !visited.contains(current) {
             visited.insert(current)
@@ -151,12 +159,17 @@ public enum ProcessTree {
             if proc.name == "launchd" { break }
 
             // Check if this is a Mac app
-            if let bundleID = appPIDs[current] {
-                if terminalBundleIDs.contains(bundleID) {
-                    terminalBundleID = bundleID
+            if let app = apps[current] {
+                if terminalBundleIDs.contains(app.bundleID) {
+                    terminalBundleID = app.bundleID
                     terminalPID = current
                 }
-                // Don't include the Mac app itself — 1Password already shows it
+                let outer = Self.outermostApp(stoppedAt: app, apps: apps) {
+                    Bundle(path: $0)?.bundleIdentifier
+                }
+                appBundleID = outer.bundleID
+                appPID = outer.pid
+                // The app is recorded but not added to the chain.
                 break
             }
 
@@ -167,6 +180,8 @@ public enum ProcessTree {
                     terminalBundleID = helperBundle
                     terminalPID = current
                 }
+                appBundleID = helperBundle
+                appPID = current
                 break
             }
 
@@ -213,7 +228,9 @@ public enum ProcessTree {
             terminalPID: terminalPID,
             hasClaudeCode: claudePID != nil,
             claudePID: claudePID,
-            scriptInfo: scriptInfo
+            scriptInfo: scriptInfo,
+            appBundleID: appBundleID,
+            appPID: appPID
         )
     }
 
@@ -481,14 +498,79 @@ public enum ProcessTree {
         return path
     }
 
+    /// Executable path the kernel recorded at exec time (`proc_pidpath`).
+    /// Unlike argv[0] and the KERN_PROCARGS2 exec path, the process cannot
+    /// rewrite it, and unlike the kinfo name it is not truncated.
+    public static func kernelExecutablePath(pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// A running macOS app, as far as chain walking cares.
+    struct RunningApp: Equatable {
+        let pid: pid_t
+        let bundleID: String
+        let bundlePath: String?
+    }
+
+    /// Path of the outermost `.app` bundle containing `path`, or nil.
+    static func outermostAppBundlePath(_ path: String) -> String? {
+        let components = (path as NSString).pathComponents
+        guard let index = components.firstIndex(where: { $0.hasSuffix(".app") }) else { return nil }
+        return NSString.path(withComponents: Array(components[...index]))
+    }
+
+    /// The app to report for a chain that stopped at `app`: the outermost
+    /// enclosing bundle when `app` is nested, else `app` itself. The PID is
+    /// the running instance of the outermost bundle when there is one.
+    /// `bundleIDAt` reads a bundle's identifier from its path (injected for tests).
+    static func outermostApp(
+        stoppedAt app: RunningApp,
+        apps: [pid_t: RunningApp],
+        bundleIDAt: (String) -> String?
+    ) -> (bundleID: String, pid: pid_t) {
+        guard let path = app.bundlePath,
+              let outerPath = outermostAppBundlePath(path),
+              outerPath != path,
+              let outerID = bundleIDAt(outerPath) else {
+            return (app.bundleID, app.pid)
+        }
+        let outerPID = apps.values.filter { $0.bundlePath == outerPath }.map(\.pid).min() ?? app.pid
+        return (outerID, outerPID)
+    }
+
+    /// Name to show for an app: the short terminal name when known, else the
+    /// bundle's file name without `.app`, else the bundle ID.
+    static func appDisplayName(bundleID: String, bundlePath: String?) -> String {
+        if let terminal = humanTerminalName(bundleID: bundleID), terminal != bundleID {
+            return terminal
+        }
+        if let path = bundlePath {
+            let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+            if !name.isEmpty { return name }
+        }
+        return bundleID
+    }
+
+    public static func appDisplayName(bundleID: String) -> String {
+        appDisplayName(
+            bundleID: bundleID,
+            bundlePath: NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)?.path
+        )
+    }
+
     // MARK: - Private
 
-    /// Build a mapping of PID → bundle ID for all running Mac apps.
-    private static func macAppPIDs() -> [pid_t: String] {
-        var result: [pid_t: String] = [:]
+    /// Running Mac apps keyed by PID.
+    private static func runningApps() -> [pid_t: RunningApp] {
+        var result: [pid_t: RunningApp] = [:]
         for app in NSWorkspace.shared.runningApplications {
             if let bid = app.bundleIdentifier {
-                result[app.processIdentifier] = bid
+                result[app.processIdentifier] = RunningApp(
+                    pid: app.processIdentifier, bundleID: bid, bundlePath: app.bundleURL?.path
+                )
             }
         }
         return result
