@@ -295,7 +295,7 @@ Key responsibilities:
 
 ### 4.6 Rule engine: `RequestRule`, `RequestRuleEngine`, `RequestRuleStore`
 
-`MatchContext` is the input to evaluation: the process chain, trigger argv, `cwd` and `triggerCwd`, `claudeSession`, optional `ClaudePluginUpdate`, and `terminalBundleID`. It's built once per detection by `OnePasswordWatcher` and passed straight to the engine.
+`MatchContext` is the input to evaluation: the process chain, trigger argv, `cwd` and `triggerCwd`, `claudeSession`, optional `ClaudePluginUpdate`, and `terminalBundleID`. It's built once per detection by `TriggerEntryBuilder` (for both watchers) and passed straight to the engine.
 
 `RequestRuleEngine.evaluate(rules:, context:)` walks the rule list in order. For each enabled rule, it parses the predicate (lazily, every evaluation) via `PredicateParser.parse`, evaluates it against `MatchContext.predicateBridge()` (a `PredicateContext` KVC object), and if true tries to render the template via `renderTemplate`. **A template that references a placeholder resolving to empty causes a non-match** — the engine falls through to the next rule. That's how the built-ins do "structured render, then raw fallback" pairs on the same predicate. Predicates that fail to parse are logged and skipped, never crashed on.
 
@@ -357,7 +357,7 @@ Placement is chosen by the caller through `show(entries:near:placement:)`. Both 
 - `.aboveWindow` (1Password): 8 pt above the dialog, centered on it. Without a frame, slightly above screen center.
 - `.insideBrowserWindow` (OIDC): centered horizontally on the browser window, bottom edge 16 pt above the window's bottom edge, never covering the top 120 pt (tabs and address bar). A window too short for that gets the overlay directly below it. The result is clamped to the visible frame of the screen containing the window. Without a frame, centered on the main screen. The math is the pure `browserOverlayOrigin`.
 
-OIDC entries (`ProcessEntry.source == .oidcLogin`) differ in three places: the action row shows the summary title in the `oidcLogin` color role, row 1 shows the requesting app's icon and name when the app is not a terminal, and the details tree is rooted at that app.
+OIDC entries (`ProcessEntry.source == .oidcLogin`) differ from 1Password entries as follows: the action row shows the summary title in the `oidcLogin` color role, row 1 shows the requesting app's icon and name when the app is not a terminal, the who row shows the app name when the folded chain is empty, the details tree is rooted at that app, and Send Message writes an OIDC-specific line (`RequestSource.ttyMessage`).
 
 ### 4.12 `TerminalHelper` — terminal app integration
 
@@ -396,7 +396,7 @@ Two public entry points wrap `redactToken`:
 
 Call sites (redaction happens at *capture*, so no downstream consumer ever sees the raw secret):
 
-- `OnePasswordWatcher` wraps `ProcessTree.processArgv(triggerPID)` in `redactArgv` — the redacted argv is what feeds the overlay, the unified log, and predicate rule matching.
+- `OnePasswordWatcher` and `OidcLoginWatcher` wrap `ProcessTree.processArgv(triggerPID)` in `redactArgv` — the redacted argv is what feeds the overlay, the unified log, and predicate rule matching.
 - `ProcessTree.detectScript` runs `redactString` over interpreter `-c` / `-e` inline-command snippets before truncation.
 - `ClaudeContext` runs `redactString` over the last user prompt and last relevant command **before** truncating them (so a secret split by truncation can't leak a partial).
 
