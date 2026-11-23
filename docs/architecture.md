@@ -428,10 +428,10 @@ flowchart TB
     verify --> launchd{name == launchd?}
     launchd -- yes --> done([emit ChainResult])
     launchd -- no --> isApp{PID has bundleID?}
-    isApp -- yes --> recordTerm[record appBundleID + appPID (outermost bundle)<br/>if bundleID is a terminal:<br/>record terminalBundleID + PID]
+    isApp -- yes --> recordTerm["record appBundleID + appPID (outermost bundle)<br/>if bundleID is a terminal:<br/>record terminalBundleID + PID"]
     recordTerm --> done
     isApp -- no --> isHelper{name matches a<br/>terminal-helper prefix?}
-    isHelper -- yes --> recordHelper[record terminalBundleID + PID<br/>and appBundleID + appPID]
+    isHelper -- yes --> recordHelper["record terminalBundleID + PID<br/>and appBundleID + appPID"]
     recordHelper --> done
     isHelper -- no --> tty[if no TTY recorded yet:<br/>record this proc&apos;s TTY]
     tty --> claude[if name == &quot;claude&quot;:<br/>record claudePID]
