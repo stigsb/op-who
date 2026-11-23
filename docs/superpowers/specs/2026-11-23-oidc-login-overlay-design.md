@@ -102,12 +102,16 @@ Sender verification would need an XPC/socket channel with a code-signature check
   clamped to the visible frame of the screen containing the window. Without a frame, the overlay is
   centered on the main screen.
 - 1Password overlay placement does not change.
+- Show delay: the overlay appears only if kubelogin is still running 1 s (`OidcLogin.showDelay`)
+  after the notification. A login that SSO completes without user input ends sooner and gets no
+  overlay, so a browser window that opens and closes by itself is not explained by a popup. Step-up
+  logins and any login waiting for the user get one.
 - Dismissal: poll `kill(requesterPID, 0)` every 500 ms. kubelogin exits when the login completes or
   times out.
 - Panels: at most one 1Password panel and at most one OIDC panel exist at a time. Each watcher owns a
   single `OverlayPanel` and reuses it, so the two can be visible together but neither source ever
   shows two. A second notification for the tracked PID is ignored. A notification for a different
-  PID replaces the OIDC panel's content and resets tracking to the new PID.
+  PID dismisses the OIDC panel and restarts the show delay for the new PID.
 - "Send Message" writes an OIDC-specific line to the TTY (`RequestSource.ttyMessage`).
 
 ## Out of scope

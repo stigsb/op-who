@@ -6,6 +6,11 @@ import Foundation
 public enum OidcLogin {
     public static let notificationName = Notification.Name("ai.sunstoneinstitute.oidc-browser.login-opened")
 
+    /// Seconds kubelogin must still be running after the notification before
+    /// the overlay shows. A login that SSO completes without user input ends
+    /// sooner, so only step-up or other logins that wait for the user get one.
+    public static let showDelay: TimeInterval = 1
+
     /// Executable basenames of kubelogin.
     static let helperNames: Set<String> = ["kubectl-oidc_login", "kubelogin"]
 

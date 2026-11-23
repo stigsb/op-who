@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Added: overlay for Kubernetes OIDC logins started by `oidc-browser`, shown inside the browser window and naming the app, terminal tab and command that needed the login. New `oidcLogin` popup color.
+- Added: overlay for Kubernetes OIDC logins started by `oidc-browser`, shown inside the browser window and naming the app, terminal tab and command that needed the login. New `oidcLogin` popup color. The overlay appears only when the login is still waiting after 1 second, so logins that SSO completes on its own show nothing.
 
 ## [0.12.2] - 2026-07-13
 
