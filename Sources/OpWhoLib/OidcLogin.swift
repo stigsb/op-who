@@ -39,11 +39,12 @@ public enum OidcLogin {
               let pid = pid_t(pidString), pid > 1 else { return nil }
         var frame: CGRect? = nil
         if let f = userInfo?["frame"] as? String {
-            let n = f.split(separator: ",").compactMap {
+            let n = f.split(separator: ",", omittingEmptySubsequences: false).map {
                 Double($0.trimmingCharacters(in: .whitespaces))
             }
-            if n.count == 4, n[2] > 0, n[3] > 0 {
-                frame = CGRect(x: n[0], y: n[1], width: n[2], height: n[3])
+            if n.count == 4, case let v = n.compactMap({ $0 }), v.count == 4,
+               v.allSatisfy({ $0.isFinite }), v[2] > 0, v[3] > 0 {
+                frame = CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
             }
         }
         return Request(requesterPID: pid, frame: frame)

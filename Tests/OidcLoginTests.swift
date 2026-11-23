@@ -53,6 +53,10 @@ struct OidcLoginTests {
         #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242"])?.frame == nil)
         #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242", "frame": "garbage"])?.frame == nil)
         #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242", "frame": "0,0,0,600"])?.frame == nil)
+        #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242", "frame": "nan,0,800,600"])?.frame == nil)
+        #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242", "frame": "0,0,inf,600"])?.frame == nil)
+        #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242", "frame": "1,x,2,3,4"])?.frame == nil)
+        #expect(OidcLogin.parse(userInfo: ["requesterPID": "4242", "frame": "1,x,2,3"])?.frame == nil)
     }
 
     @Test func parseRejectsBadPID() {
