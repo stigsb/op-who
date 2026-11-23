@@ -34,7 +34,11 @@ func bodyRows(entry: OverlayPanel.ProcessEntry, dense: Bool) -> [BodyRow] {
     // Action — cwd:nil so commit-signing renders "signing a commit" (location
     // lives in its own row).
     let actionText: String
-    if let update = entry.pluginUpdate {
+    if entry.source == .oidcLogin {
+        // The OIDC sentence comes from OidcLogin.rules and already names the
+        // actor and the command.
+        actionText = entry.summary.title
+    } else if let update = entry.pluginUpdate {
         actionText = "plugin update check from \(update.remoteURL)"
     } else {
         actionText = operationDisplay(argv: entry.triggerArgv, chain: entry.chain, cwd: nil)
@@ -44,7 +48,10 @@ func bodyRows(entry: OverlayPanel.ProcessEntry, dense: Bool) -> [BodyRow] {
     // Who — driver + optional script (cwd is no longer appended here).
     let driver = driverDescription(chain: entry.chain, claudeSession: entry.claudeSession)
     var whoValue = driver.text
-    if entry.claudeSession == nil, let s = entry.scriptInfo {
+    if entry.source == .oidcLogin, entry.chain.isEmpty {
+        // An app ran kubelogin itself: the app is who asked.
+        whoValue = entry.appName ?? "unknown"
+    } else if entry.claudeSession == nil, let s = entry.scriptInfo {
         // Show the command name too — for a plain invoked command the name is
         // the leading argv token (`git commit -m msg`); scriptName alone would
         // drop it. For an interpreter it prepends `python app.py` etc.

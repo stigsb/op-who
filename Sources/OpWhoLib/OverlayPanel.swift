@@ -497,8 +497,9 @@ public class OverlayPanel {
     /// it — those names are user-renameable and the env vars don't update.
     /// Fall back to NSAccessibility-derived tabTitle for non-cmux terminals.
     private func makeTerminalRow(_ entry: ProcessEntry) -> NSView {
-        let bundleID = entry.terminalBundleID
-        let termName = humanTerminalName(bundleID: bundleID) ?? "Unknown terminal"
+        let app = Self.leadRowApp(entry: entry)
+        let bundleID = app.bundleID
+        let termName = app.name
         let parts = Self.terminalRowParts(entry: entry, termName: termName)
 
         let row = NSStackView()
@@ -595,6 +596,26 @@ public class OverlayPanel {
         var main: String { title + qualifier + suffix }
     }
 
+    /// App shown in row 1 (icon + name). A known terminal always wins, so a
+    /// terminal request shows the app and its tab. Otherwise OIDC entries
+    /// show the requesting app; 1Password entries keep "Unknown terminal"
+    /// (the 1Password dialog already names the app).
+    static func leadRowApp(entry: ProcessEntry) -> (bundleID: String?, name: String) {
+        if let terminal = humanTerminalName(bundleID: entry.terminalBundleID) {
+            return (entry.terminalBundleID, terminal)
+        }
+        guard entry.source == .oidcLogin else { return (nil, "Unknown terminal") }
+        return (entry.appBundleID, entry.appName ?? "Unknown app")
+    }
+
+    /// Root node of the details process tree.
+    static func treeRoot(entry: ProcessEntry) -> (name: String?, pid: pid_t?) {
+        if entry.source == .oidcLogin, let name = entry.appName {
+            return (name, entry.appPID)
+        }
+        return (humanTerminalName(bundleID: entry.terminalBundleID), entry.terminalPID)
+    }
+
     /// Build the parts of row 1.
     static func terminalRowParts(entry: ProcessEntry, termName: String) -> TerminalRowParts {
         if let s = entry.cmuxSurface {
@@ -675,10 +696,8 @@ public class OverlayPanel {
     /// Render the parent-first process tree as a single monospaced label with
     /// `└─` connectors and PIDs in parens. The `op` node is colored.
     private func makeProcessTreeLabel(_ entry: ProcessEntry) -> NSTextField {
-        let appName = humanTerminalName(bundleID: entry.terminalBundleID)
-        let nodes = processTreeNodes(
-            appName: appName, appPID: entry.terminalPID, chain: entry.chain
-        )
+        let root = Self.treeRoot(entry: entry)
+        let nodes = processTreeNodes(appName: root.name, appPID: root.pid, chain: entry.chain)
         let font = style.font(.mono, weight: .regular, tier: .small)
         let out = NSMutableAttributedString()
         for (i, node) in nodes.enumerated() {
