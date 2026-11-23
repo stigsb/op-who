@@ -42,6 +42,8 @@ public struct RequestSummary: Equatable {
 /// `rules` selects which ordered ruleset to run. nil uses the live
 /// `OpWhoConfig.rules` (the user's stored configuration); tests pass an
 /// explicit list when they want a hermetic check.
+///
+/// `appName` names the requesting app and is used as the actor only when `chain` is empty (OIDC logins started by an app). 1Password callers leave it nil.
 public func makeRequestSummary(
     chain: [ProcessNode],
     triggerArgv: [String] = [],
@@ -52,7 +54,8 @@ public func makeRequestSummary(
     cwd: String?,
     triggerCwd: String? = nil,
     pluginUpdate: ClaudePluginUpdate? = nil,
-    rules: [RequestRule]? = nil
+    rules: [RequestRule]? = nil,
+    appName: String? = nil
 ) -> RequestSummary {
     let activeRules = rules ?? OpWhoConfig.rules
     let context = MatchContext(
@@ -104,7 +107,8 @@ public func makeRequestSummary(
             chain: chain,
             tabTitle: tabTitle,
             claudeSession: claudeSession,
-            terminalBundleID: terminalBundleID
+            terminalBundleID: terminalBundleID,
+            appName: appName
         )
         title = "\(actor) \(action)"
 
@@ -385,8 +389,12 @@ private func describeActor(
     chain: [ProcessNode],
     tabTitle: String?,
     claudeSession: String?,
-    terminalBundleID: String?
+    terminalBundleID: String?,
+    appName: String? = nil
 ) -> String {
+    // No command in the chain: the app itself asked.
+    if chain.isEmpty, let appName = appName { return appName }
+
     let isCmux = isCmuxBundleID(terminalBundleID)
     let workspaceName: String? = (isCmux && tabTitle != nil && !looksGeneric(tabTitle: tabTitle!)) ? tabTitle : nil
 

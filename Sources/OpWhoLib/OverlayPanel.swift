@@ -59,6 +59,14 @@ public class OverlayPanel {
         /// global setting applies. Declared `var` with a default for the same
         /// reason as `gitContext` above.
         var soundID: String? = nil
+        /// Which prompt this entry explains. Drives the "Send Message" text
+        /// and the OIDC-only rendering branches.
+        var source: RequestSource = .onePassword
+        /// The macOS app the chain stopped at (`ChainResult.appBundleID/appPID`).
+        var appBundleID: String? = nil
+        var appPID: pid_t? = nil
+        /// Display name of that app. Set for OIDC entries only.
+        var appName: String? = nil
     }
 
     public init() {}
@@ -389,7 +397,7 @@ public class OverlayPanel {
             msgBtn.font = NSFont.systemFont(ofSize: 11)
             msgBtn.target = self
             msgBtn.action = #selector(sendTTYMessage(_:))
-            msgBtn.cell?.representedObject = tty
+            msgBtn.cell?.representedObject = [tty, entry.source.rawValue]
             buttonStack.addArrangedSubview(msgBtn)
 
             stack.addArrangedSubview(buttonStack)
@@ -706,8 +714,10 @@ public class OverlayPanel {
     }
 
     @objc private func sendTTYMessage(_ sender: NSButton) {
-        guard let tty = sender.cell?.representedObject as? String else { return }
-        TerminalHelper.writeMessage(to: tty, message: "\n[op-who] 1Password approval requested from this session\n")
+        guard let info = sender.cell?.representedObject as? [String],
+              info.count == 2,
+              let source = RequestSource(rawValue: info[1]) else { return }
+        TerminalHelper.writeMessage(to: info[0], message: source.ttyMessage)
     }
 
     // MARK: - Color & icon
