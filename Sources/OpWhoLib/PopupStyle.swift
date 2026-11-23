@@ -3,7 +3,7 @@ import AppKit
 /// Semantic color roles the popup renders. Raw value is the stable storage
 /// key used in `AppSettings.popupColorOverrides`.
 public enum PopupColorRole: String, CaseIterable {
-    case claude, editor, verifiedOp, unverifiedOp, ssh
+    case claude, editor, verifiedOp, unverifiedOp, ssh, oidcLogin
     case gitRoot, branch, worktree
     case dimLabel, brightValue
 
@@ -15,6 +15,7 @@ public enum PopupColorRole: String, CaseIterable {
         case .verifiedOp:   return OverlayColors.verifiedOp
         case .unverifiedOp: return OverlayColors.unverifiedOp
         case .ssh:          return OverlayColors.ssh
+        case .oidcLogin:    return OverlayColors.oidcLogin
         case .gitRoot:      return OverlayColors.gitRoot
         case .branch:       return OverlayColors.branch
         case .worktree:     return OverlayColors.worktree

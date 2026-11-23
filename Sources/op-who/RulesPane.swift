@@ -305,6 +305,8 @@ final class RulesPane: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         templateHelp.maximumNumberOfLines = 3
         templateHelp.preferredMaxLayoutWidth = 460
 
+        // RequestKind.oidcLogin is deliberately absent: OIDC rules are fixed
+        // (OidcLogin.rules), not user-editable.
         kindPopup.addItems(withTitles: [
             RequestKind.onePasswordCLI.rawValue,
             RequestKind.unverifiedOp.rawValue,

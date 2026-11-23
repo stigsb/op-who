@@ -459,6 +459,7 @@ public class OverlayPanel {
         case .onePasswordCLI: return style.color(.verifiedOp)
         case .unverifiedOp:   return style.color(.unverifiedOp)
         case .ssh:            return style.color(.ssh)
+        case .oidcLogin:      return style.color(.oidcLogin)
         case .unknown:        return style.color(.brightValue)
         }
     }

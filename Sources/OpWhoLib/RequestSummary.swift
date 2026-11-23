@@ -9,6 +9,8 @@ public enum RequestKind: String, Codable, Equatable {
     case unverifiedOp
     /// SSH-family request (ssh, scp, sftp, rsync, or git invoking ssh).
     case ssh
+    /// OIDC login started by kubelogin. Used only by `OidcLogin.rules`.
+    case oidcLogin
     /// Trigger we couldn't classify (chain empty or unfamiliar leader).
     case unknown
 }

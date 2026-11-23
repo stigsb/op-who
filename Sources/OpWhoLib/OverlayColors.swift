@@ -24,6 +24,11 @@ public enum OverlayColors {
     public static let ssh = dynamic(
         light: NSColor(srgbRed: 0.0, green: 0.35, blue: 0.80, alpha: 1),
         dark:  NSColor(srgbRed: 0.45, green: 0.72, blue: 1.0, alpha: 1))
+    // Yellow-green (hue ~85°), in the widest gap between existing hues
+    // (gold 45°, green 147°).
+    public static let oidcLogin = dynamic(
+        light: NSColor(srgbRed: 0.24, green: 0.44, blue: 0.0, alpha: 1),
+        dark:  NSColor(srgbRed: 0.66, green: 0.88, blue: 0.28, alpha: 1))
 
     // Dedicated location-field colors. Each of git-root / branch / worktree
     // keeps its own hue in a fixed row so the value can be found by color as
