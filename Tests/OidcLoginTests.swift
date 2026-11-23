@@ -111,3 +111,48 @@ struct OidcLoginTests {
         }
     }
 }
+
+@Suite("OidcLoginWatcher script subtitle")
+struct OidcLoginWatcherScriptInfoTests {
+    private let argv: [pid_t: [String]] = [
+        10: ["kubectl-oidc_login", "get-token"],
+        9: ["kubectl", "apply", "-f", "x"],
+        8: ["sh", "-c", "kubectl apply -f x"],
+    ]
+
+    @Test func kubectlAsTriggerYieldsNoScriptInfo() {
+        let kubelogin = node("kubectl-oidc_log", pid: 10)
+        let kubectl = node("kubectl", pid: 9)
+        let sh = node("sh", pid: 8)
+        let stale = ScriptInfo(interpreter: "sh", scriptName: "apply -f x", scriptPath: nil)
+        var result = ChainResult(
+            chain: [kubelogin, kubectl, sh], tty: "ttys001",
+            terminalBundleID: "com.apple.Terminal", terminalPID: 5,
+            hasClaudeCode: false, claudePID: nil, scriptInfo: stale
+        )
+        result.appBundleID = "com.apple.Terminal"
+        result.appPID = 5
+
+        let rebased = OidcLoginWatcher.rebasingScriptInfo(
+            result, foldedChain: [kubectl, sh], argvFor: { argv[$0] ?? [] }
+        )
+        #expect(rebased.scriptInfo == nil)
+        #expect(rebased.chain.map(\.pid) == [10, 9, 8])
+        #expect(rebased.tty == "ttys001")
+        #expect(rebased.appBundleID == "com.apple.Terminal")
+        #expect(rebased.appPID == 5)
+    }
+
+    @Test func emptyFoldedChainYieldsNoScriptInfo() {
+        let stale = ScriptInfo(interpreter: "sh", scriptName: "x", scriptPath: nil)
+        let result = ChainResult(
+            chain: [node("kubectl-oidc_log", pid: 10)], tty: nil,
+            terminalBundleID: nil, terminalPID: nil,
+            hasClaudeCode: false, claudePID: nil, scriptInfo: stale
+        )
+        let rebased = OidcLoginWatcher.rebasingScriptInfo(
+            result, foldedChain: [], argvFor: { _ in [] }
+        )
+        #expect(rebased.scriptInfo == nil)
+    }
+}

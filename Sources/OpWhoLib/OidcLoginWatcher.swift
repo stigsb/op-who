@@ -63,7 +63,10 @@ public final class OidcLoginWatcher: NSObject {
         let entry = TriggerEntryBuilder.makeEntry(
             foldedChain: chain,
             fallbackNode: requester,
-            chainResult: result,
+            chainResult: Self.rebasingScriptInfo(
+                result, foldedChain: chain,
+                argvFor: { ProcessTree.processArgv(pid: $0) }
+            ),
             triggerArgv: triggerArgv,
             rules: OidcLogin.rules,
             source: .oidcLogin
@@ -83,6 +86,33 @@ public final class OidcLoginWatcher: NSObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.dismissIfRequesterExited()
         }
+    }
+
+    /// `buildChain` computed `scriptInfo` with kubelogin as the trigger. Once
+    /// the helpers are dropped the next node (kubectl) is the real trigger, so
+    /// recompute against the folded chain. Everything else is carried over.
+    static func rebasingScriptInfo(
+        _ result: ChainResult,
+        foldedChain: [ProcessNode],
+        argvFor: (pid_t) -> [String]
+    ) -> ChainResult {
+        var rebased = ChainResult(
+            chain: result.chain,
+            tty: result.tty,
+            terminalBundleID: result.terminalBundleID,
+            terminalPID: result.terminalPID,
+            hasClaudeCode: result.hasClaudeCode,
+            claudePID: result.claudePID,
+            scriptInfo: ProcessTree.resolveScriptInfo(
+                chain: foldedChain,
+                triggerPID: foldedChain.first?.pid,
+                claudePID: result.claudePID,
+                argvFor: argvFor
+            )
+        )
+        rebased.appBundleID = result.appBundleID
+        rebased.appPID = result.appPID
+        return rebased
     }
 
     /// kubelogin exits when the login completes or times out.
